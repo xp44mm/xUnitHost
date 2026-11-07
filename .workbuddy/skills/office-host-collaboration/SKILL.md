@@ -235,6 +235,7 @@ XUNITHOST_CONVERT_DIR='C:\某个目录' XUNITHOST_CONVERT_BATCH=5 "$exe" ...
 | 批量转格式 | `xUnitHost/ConvertCore.fs` + `Convert.fs`（**前部**）；`WordHost/DocIO.fs` + `DocUpgrade.fs`、`ExcelHost/BookIO.fs` + `XlsUpgrade.fs`（两个 host 库**末尾**） | 两侧对称：各一份文件放三个入口 —— 两条转换各自独立（格式码/后缀/核对/文案各归其主）+ 一个统一入口判宏 → 纯规则 `route` 选路；共用 COM 细节在各自的 `*IO.fs`；host 只回传 `(目标, 状态, 详情)`，`Convert.fs` 组装 Outcome、只留 `Paths.scan` / `Convert.all` / `readWordText` / `readBookPrint` / `canDelete`；真目录入口是两条按环境变量跑的 Fact（`ConvertTest.fs` 末段） |
 | 黑板展示文本参考解析 | `xUnitHost/BlackboardText.fs`（测试项目前部） | `module internal BlackboardText`：`caption` / `ofText` 把插件文本填成 `AppInfo` 参数表，只供调用方参考；**`OsHost` 不认文本，只认结构化参数表** |
 | 通用参数表（另一条路） | `OsHost/GeneralAppInfo.fs` + `xUnitHost/GeneralAppInfoTest.fs` | 与 `AppKind` 解耦：`GeneralIdentity` 三个参数占位、`attachWith` 的 `acquire` / `work` 获取函数占位；`-method "*通用参数表*"`；12:01 落地时原 `AppInfo.fs` 未动，13:51 两路一起撤了文档级交接检查 |
+| Excel 的通用入口 | `ExcelHost/Host.fs` 的 `Host.General`（旧 `GetApplication` 正下方）+ `xUnitHost/ExcelGeneralTest.fs` | `Host.General.GetApplication(info: GeneralAppInfo)`：`Tag="excel"` 公开常量、`GeneralAppInfo.attach` + 强转 Excel.Application + pid 核对；旧入口与其余三家未动；`-method "*Excel 通用参数表*"` 两条 Fact，ROT 探针走完整链路、不启真机 Excel |
 | 跨进程 | `xUnitHost/SecondProcessTest.fs` | 第二个进程 = 测试程序自己；地址 / 要说的话 / 回话文件都从环境变量来 |
 
 **项目的增减由用户定**：往现有项目里**加文件随时可以**（新 Fact、新公用模块都行）；但
@@ -301,8 +302,11 @@ WorkBuddy 只读写、**不负责黑板的创建与销毁**。四家 host 各有
 **另一条路（2026-11-07 12:01，用户要求「原文件不动，另起炉灶」）**：`OsHost/GeneralAppInfo.fs` 的
 `GeneralAppInfo` 与 `AppKind` 完全解耦 —— 进程名 / 显示名 / 种类标记由 `GeneralIdentity` 三个**参数**占位，
 「怎么取对象」「拿到 obj 之后怎么转强类型」由 `attachWith` 的 `acquire` / `work` 两个**获取函数**占位。
-现场校验口径与 `AppInfo` 一致，两条路并存、四家 host 仍在旧路上；验证 `-method "*通用参数表*"`（三条），
-完整 API 见 `references/api.md`。生产层不知道 `AppKind` 存在，桥接示例只在测试项目。
+现场校验口径与 `AppInfo` 一致，两条路并存；**14:05 起 Excel 另有 `ExcelHost.Host.General.GetApplication(info: GeneralAppInfo)`**
+（嵌套模块保留函数名，Tag 公开为 `Host.General.Tag`），其余三家 host 仍在旧路上。
+验证 `-method "*通用参数表*"`（现五条：`GeneralAppInfoTest.fs` 三条 + `ExcelGeneralTest.fs` 两条），
+只跑 Excel 入口用 `-method "*Excel 通用参数表*"`；完整 API 见 `references/api.md`。
+生产层不知道 `AppKind` 存在，桥接示例只在测试项目。
 13:51 起两路都不做文档级交接检查（见上），`DocName` / `DocPath` 只是收下的数据。
 
 ## 汇报格式

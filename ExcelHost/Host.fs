@@ -70,6 +70,31 @@ module Host =
             with ex ->
                 Error(Errors.explain ex))
 
+    // ---------------- 黑板模式：通用参数表那条路 ----------------
+
+    /// 另一条路：按 GeneralAppInfo 挂回现成的那一只 Excel 实例，**不认 AppKind**。
+    /// 与上面的 GetApplication 并存 —— F# 同一模块不能有两个同名 let，所以放在 Host.General 里，
+    /// 调用方写 ExcelHost.Host.General.GetApplication info。
+    /// 种类靠调用方填的 Tag（就是这里公开的 Tag）与 Identity 的 Image / Name，库只比字符串；
+    /// 取现成对象走 GeneralAppInfo.attach（ROT 名优先，空则按 ProgID），强类型转换与 pid 核对由 work 注入。
+    /// 只附着、不新建、不 Quit、不改应用状态；文档级交接检查按用户要求推迟，DocName / DocPath 只是收下的数据。
+    /// 返回的 Application 与后续读写都放在 OsHost.Sta.run 那条固定 STA 线程上。
+    module General =
+        /// 调用方填 GeneralIdentity 的 Tag 时用这个值，别把种类标记写成隐式约定。
+        let Tag = "excel"
+
+        let GetApplication (info: GeneralAppInfo) : Result<Application, string> =
+            GeneralAppInfo.attach info Tag progIds (fun raw ->
+                try
+                    let app = raw :?> Application
+
+                    match pidOf app with
+                    | Some number when number <> info.Pid ->
+                        Error(sprintf "ROT 名字指向的是 PID %d，不是黑板上的 %d" number info.Pid)
+                    | _ -> Ok app
+                with ex ->
+                    Error(Errors.explain ex))
+
     // ---------------- 认自己是谁 ----------------
     // 地址里的指纹就是从这儿来的：哪个进程、锚定哪本工作簿、那本工作簿最后什么时候存的。
 

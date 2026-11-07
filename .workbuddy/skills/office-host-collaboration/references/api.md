@@ -421,3 +421,19 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -noColor -showLiveOutput
   `BlackboardProbe`，`register / acquire / revoke` 都排在**同一条** `Sta.run` 线程上
   （避免跨公寓、也避免 `Sta.run` 嵌套），正向挂回 `Ok "XUnitHost.BlackboardProbe"` —— 不需要 Office 的完整附着链。
   第三条现在只对照 `verify` 与文档字段照抄，不再验「换了文档 / 文档关了 / 存过盘」四种情形。
+
+### Excel 上「用 General 的 GetApplication」（2026-11-07 14:05）
+
+用户指定 `ExcelHost/Host.fs#72`（旧 `GetApplication` 正下方）再写一个走通用参数表的入口。
+**F# 同一模块不能有两个同名 `let GetApplication`**，所以放在嵌套模块里以保留名字：
+
+- `ExcelHost.Host.General.Tag = "excel"`（公开常量，调用方填 `GeneralIdentity.Tag` 就用它，别把标记写成隐式约定）；
+  `ExcelHost.Host.General.GetApplication : GeneralAppInfo -> Result<Excel.Application,string>`。
+- 实现 `GeneralAppInfo.attach info Tag progIds work`：`work` 做 `raw :?> Excel.Application` + `Host.pidOf` 核对
+  + `Errors.explain`（与旧入口同一口径）。不认 `AppKind`、不新建、不 Quit、不改应用状态；
+  文档级检查仍按 13:51 的决定推迟，返回的 Application 与后续读写都在 `Sta.run` 那条 STA 线程上。
+- 旧入口 `ExcelHost.Host.GetApplication(AppInfo)` 与其余三家 host **一行未动**，两条路并存。
+- 验证 `xUnitHost/ExcelGeneralTest.fs` 两条 Fact，只跑它们用 `-method "*Excel 通用参数表*"`；
+  它们也命中 `-method "*通用参数表*"`（现共五条）。一条验错 Tag / 过时信息拒接且四家进程前后一致，
+  另一条用 ROT 探针按名取回现成对象、走完整入口链路（取到对象但不是 Excel.Application → 明确 `Error`；
+  名字不在 / 标记错配拒接）。**不需要起真机 Excel**；本机没有运行的 ExcelVSTO 实例，正向 `Ok app` 未实跑。

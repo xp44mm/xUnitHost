@@ -31,6 +31,8 @@
     <Compile Include="BlackboardTest.fs" />
     <!-- 另一条路：与 AppKind 解耦的通用参数表；复用 BlackboardProbe，故排在黑板之后 -->
     <Compile Include="GeneralAppInfoTest.fs" />
+    <!-- Excel 上「用 GeneralAppInfo 的 GetApplication」入口；复用 BlackboardProbe -->
+    <Compile Include="ExcelGeneralTest.fs" />
     <Compile Include="HostGreetingTest.fs" />
     <Compile Include="SecondProcessTest.fs" />
     <Compile Include="CollaborationTest.fs" />
