@@ -369,8 +369,10 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -noColor -showLiveOutput
 - `OsHost/AppInfo.fs`：`AppKind = Word | Excel | PowerPoint | AutoCAD`；**`AppInfo` 是调用方要填的结构化参数表**：
   `Kind/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath`，全是结构化字段，没有一行展示文本。
   直接构造记录，或用类型上的**静态构造成员** `AppInfo.create (kind, pid, rot, hwnd, exePath, capturedMs)`
-  起最小必填集再 `with` 补 `DocName` / `DocPath`（2026-11-07 11:37 取代原模块函数 `ofParts`）；`describe` 打印摘要。
-  `image` / `kindName` / `verify` / `ensureKind` / `checkDoc` / `attach` 仍在同名 `module AppInfo` 里。
+  起最小必填集再 `with` 补 `DocName` / `DocPath`（2026-11-07 11:37 取代原模块函数 `ofParts`）。
+  **成员函数**（2026-11-07 11:44）：`AppKind` 上 `kind.image()` = 进程名、`kind.kindName()` = 给人看的名字；
+  `AppInfo` 上 `info.describe()` = 一行摘要。同名 `module AppInfo` 里只剩
+  `verify` / `ensureKind` / `checkDoc` / `attach`，它们内部改调这些成员。
   **库不解析文本**：`ofText` 与展示用的 `Title` 已从 `OsHost` 移除 —— 插件改标题、键名、措辞只该改调用方。
   采集时间由填报方给 Unix 毫秒，库不替你猜。
   `verify` 核「进程还在 / 启动时间不晚于采集 / HWND 仍属该 pid / EXE 一致 / ROT 名后缀 pid 一致」；

@@ -63,7 +63,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         let parse (label: string) (text: string) =
             match BlackboardText.ofText text with
             | Ok info ->
-                Report.line output label (AppInfo.describe info)
+                Report.line output label (info.describe())
                 info
             | Error message -> failwith message
 
@@ -81,7 +81,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
             { (AppInfo.create (AppKind.Word, 27232, "!WordVSTO.Instance.27232", (nativeint 0x002304FA), @"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE", word.CapturedMs))
               with DocName = Some "文档1"; DocPath = None }
 
-        Report.line output "手工填报" (AppInfo.describe filled)
+        Report.line output "手工填报" (filled.describe())
         Should.equal word filled
 
         let excel = parse "Excel" excelText
@@ -118,7 +118,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
 
         let captured = Report.unixMs DateTime.Now
         let dead = AppInfo.create (AppKind.Word, 999999, "!WordVSTO.Instance.999999", 0n, "", captured)
-        Report.line output "输入" (AppInfo.describe dead)
+        Report.line output "输入" (dead.describe())
 
         let word = WordHost.Host.GetApplication dead
         let excel = ExcelHost.Host.GetApplication dead
@@ -245,10 +245,10 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
             Report.line output "参考解析" message
             failwith message
         | Ok info ->
-            Report.line output "参数表" (AppInfo.describe info)
+            Report.line output "参数表" (info.describe())
             Report.line output "文档" (sprintf "名字=%A 路径=%A" info.DocName info.DocPath)
 
-            let image = AppInfo.image info.Kind
+            let image = info.Kind.image()
             let before = Report.procIds image
             Report.line output "现场" (sprintf "%s 进程 %A" image (Set.toList before))
 

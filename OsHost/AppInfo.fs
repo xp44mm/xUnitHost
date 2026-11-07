@@ -18,6 +18,22 @@ type AppKind =
     | PowerPoint
     | AutoCAD
 
+    /// 进程名（Proc.ids 用的 image，不带 .exe）
+    member this.image () : string =
+        match this with
+        | AppKind.Word -> "WINWORD"
+        | AppKind.Excel -> "EXCEL"
+        | AppKind.PowerPoint -> "POWERPNT"
+        | AppKind.AutoCAD -> "acad"
+
+    /// 报错 / 报告里给人看的名字
+    member this.kindName () : string =
+        match this with
+        | AppKind.Word -> "Word"
+        | AppKind.Excel -> "Excel"
+        | AppKind.PowerPoint -> "PowerPoint"
+        | AppKind.AutoCAD -> "AutoCAD"
+
 /// 调用方要填的那张参数表：一条实例信息的全部字段，都是结构化值，没有一行展示文本。
 /// 直接构造记录即可（`{ Kind = ...; Pid = ...; ... }`），也可以用静态构造成员
 /// `AppInfo.create(...)` 起个最小集再 with 补齐。
@@ -49,31 +65,18 @@ type AppInfo =
           DocName = None
           DocPath = None }
 
-[<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
-module AppInfo =
-
-    let image (kind: AppKind) : string =
-        match kind with
-        | AppKind.Word -> "WINWORD"
-        | AppKind.Excel -> "EXCEL"
-        | AppKind.PowerPoint -> "POWERPNT"
-        | AppKind.AutoCAD -> "acad"
-
-    let kindName (kind: AppKind) : string =
-        match kind with
-        | AppKind.Word -> "Word"
-        | AppKind.Excel -> "Excel"
-        | AppKind.PowerPoint -> "PowerPoint"
-        | AppKind.AutoCAD -> "AutoCAD"
-
-    let describe (info: AppInfo) : string =
+    /// 一行摘要，贴报告 / 报错用
+    member this.describe () : string =
         sprintf
             "%s pid=%d rot=%s hwnd=%A 采集=%s"
-            (kindName info.Kind)
-            info.Pid
-            (if String.IsNullOrWhiteSpace info.Rot then "-" else info.Rot)
-            info.Hwnd
-            (Clock.show info.CapturedMs)
+            (this.Kind.kindName())
+            this.Pid
+            (if String.IsNullOrWhiteSpace this.Rot then "-" else this.Rot)
+            this.Hwnd
+            (Clock.show this.CapturedMs)
+
+[<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
+module AppInfo =
 
     let private firstError (checks: (bool * string) list) : string option =
         checks |> List.tryPick(fun (isBad, message) -> if isBad then Some message else None)
@@ -81,7 +84,7 @@ module AppInfo =
     /// 附着之前的「不过时」核对：进程还在、没被复用、窗口还属于它、EXE 路径对得上、
     /// ROT 名里的进程号与 PID 行一致。任何一条不通过就拒接，绝不改用 GetActiveObject 猜。
     let verify (info: AppInfo) : Result<unit, string> =
-        let alive = Proc.ids (image info.Kind) |> Set.contains info.Pid
+        let alive = Proc.ids (info.Kind.image()) |> Set.contains info.Pid
         let started = Proc.startedMs info.Pid
         let exe = Proc.exePath info.Pid
 
@@ -114,7 +117,7 @@ module AppInfo =
                 sprintf
                     "PID %d 的 %s 已经不在运行：黑板信息已过时，绝不另起一个"
                     info.Pid
-                    (image info.Kind) )
+                    (info.Kind.image()) )
               ( (match started with
                  | Some ms -> ms > info.CapturedMs + 2000L
                  | None -> false),
@@ -143,8 +146,8 @@ module AppInfo =
             Error(
                 sprintf
                     "黑板信息是 %s，%s 的 GetApplication 不接：别把别家的实例认成自己"
-                    (kindName info.Kind)
-                    (kindName kind)
+                    (info.Kind.kindName())
+                    (kind.kindName())
             )
         else
             Ok()
