@@ -360,3 +360,26 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -noColor -showLiveOutput
 
 `-list tests` 看所有 Fact；`-id <id>` 按 ID 跑单个用例；`-class "XUnitHost.CollaborationTest"` 按类跑
 （Fact 改成成员方法后，`-method` 要带类名匹配）。
+
+## 黑板模式：四家 GetApplication(info)（2026-11-07）
+
+场景：WordVSTO / ExcelVSTO 插件把当前实例抄到黑板上（`[…] 采集时间 …` / PID / ROT / HWND / EXE / 文档 / 路径），
+消费方只按 info 精确挂回那一只实例读写；**黑板的创建与销毁不归它管**，不并行，交接时数据要完整、不过时、没被别的任务改过。
+
+- `OsHost/AppInfo.fs`：`AppKind = Word | Excel | PowerPoint | AutoCAD`；`AppInfo` 存
+  `Kind/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath/Title`。
+  `AppInfo.ofText : string -> Result<AppInfo,string>` 直接吃插件剪贴板原文（也认 `KIND :` 行）；
+  `ofParts` / `describe`；`verify` 核「进程还在 / 启动时间不晚于采集 / HWND 仍属该 pid / EXE 一致 / ROT 名后缀 pid 一致」；
+  `ensureKind`；`checkDoc` 核「文档名字与路径一致、采集后没有再存盘」；`attach` = 种类 → 现场校验 → 按名取对象 → 交 work。
+- `OsHost.Com` 新增：`runningAt : string -> obj option`（`CreateItemMoniker("!", 名)` + `IRunningObjectTable.GetObject`，
+  **不枚举 ROT、不退回 GetActiveObject、绝不新建**）、`register` / `revoke`（自测登记本地对象用）、
+  `OsHost.Proc.exePath : int -> string option`。
+- 四家入口形状对称：`WordHost.Host.GetApplication : AppInfo -> Result<Application,string>`；
+  `ExcelHost.Host.GetApplication` / `PowerPointHost.Host.GetApplication` /
+  `AutoCADHost.Host.GetApplication : AppInfo -> Result<AcadApplication,string>`。
+  种类不符 / 信息过时 / ROT 里没这个名字 / pid 对不上 / 文档被换或被保存，一律 `Error`；
+  绝不新建、绝不 Quit、不改 `DisplayAlerts`。`PowerPointHost.Host.pidOf` 用 `app.HWND`。
+- **公寓**：`attach` 走 `Sta.run` 固定长活 STA 线程；后续对 Application 的读写也包 `Sta.run`。
+  一步做完就直接 `AppInfo.attach info kind progIds work`，别让 RCW 跑出临时 STA 线程。
+- 验证：`xUnitHost/BlackboardTest.fs` 五条 Fact（`-method "*黑板*"`）；
+  真机那条设 `XUNITHOST_BLACKBOARD_FILE=<剪贴板文本存的文件>`，不设就 Skip。

@@ -44,8 +44,7 @@ module Host =
     let TryGetRunningApplication () : Application option =
         Com.running progIds |> Option.map(fun value -> value :?> Application)
 
-    // ---------------- 认自己是谁 ----------------
-    // 地址里的指纹就是从这儿来的：哪个进程、锚定哪本工作簿、那本工作簿最后什么时候存的。
+    // ---------------- 黑板模式：按 info 挂回现成的那一只 ----------------
 
     /// 这只 Excel 的进程号（Excel 的 Application 自己有 Hwnd，一问就到）
     let pidOf (app: Application) : int option =
@@ -53,6 +52,34 @@ module Host =
             Win32.pidOfWindow(nativeint app.Hwnd)
         with _ ->
             None
+
+    /// 当前工作簿的名字与落盘路径；一本工作簿都没有就是 (None, None)
+    let private activeBook (app: Application) : string option * string option =
+        try
+            let book = app.ActiveWorkbook
+            Some book.Name, Paths.canonical book.FullName
+        with _ ->
+            None, None
+
+    /// 按插件抄下来的 info 精确挂回那一只 Excel 实例。
+    /// 只附着、不新建、不 Quit、不改应用状态 —— 黑板的生命周期不归这儿管。
+    /// 返回的 Application 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
+    let GetApplication (info: AppInfo) : Result<Application, string> =
+        AppInfo.attach info AppKind.Excel progIds (fun raw ->
+            try
+                let app = raw :?> Application
+
+                match pidOf app with
+                | Some number when number <> info.Pid ->
+                    Error(sprintf "ROT 名字指向的是 PID %d，不是黑板上的 %d" number info.Pid)
+                | _ ->
+                    let name, path = activeBook app
+                    AppInfo.checkDoc info name path |> Result.map(fun () -> app)
+            with ex ->
+                Error(Errors.explain ex))
+
+    // ---------------- 认自己是谁 ----------------
+    // 地址里的指纹就是从这儿来的：哪个进程、锚定哪本工作簿、那本工作簿最后什么时候存的。
 
     /// 现场：进程号 + 锚定的工作簿（活动工作簿）+ 那个文件在磁盘上的最后写入时间 + 有没有未保存改动。
     /// 新工作簿（还没存过盘）路径是 None、保存时间是 0。

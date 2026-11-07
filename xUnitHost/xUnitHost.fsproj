@@ -26,6 +26,8 @@
     <Compile Include="Convert.fs" />
     <!-- Rx 版两条命令：进程生命周期事件流 + 组合子编排，前部公用件 -->
     <Compile Include="ProcRx.fs" />
+    <!-- 黑板模式：四家 GetApplication(info) 的解析 / 认人 / 拒接 / 按 ROT 名字附着 -->
+    <Compile Include="BlackboardTest.fs" />
     <Compile Include="HostGreetingTest.fs" />
     <Compile Include="SecondProcessTest.fs" />
     <Compile Include="CollaborationTest.fs" />

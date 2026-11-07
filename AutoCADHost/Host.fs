@@ -36,8 +36,7 @@ module Host =
     let TryGetRunningApplication () : AcadApplication option =
         Com.running progIds |> Option.map(fun value -> value :?> AcadApplication)
 
-    // ---------------- 认自己是谁 ----------------
-    // 地址里的指纹就是从这儿来的：哪个进程、锚定哪张图、那张图最后什么时候存的。
+    // ---------------- 黑板模式：按 info 挂回现成的那一只 ----------------
 
     /// 这只 AutoCAD 的进程号（AcadApplication 自己有 HWND，一问就到）
     let pidOf (app: AcadApplication) : int option =
@@ -45,6 +44,34 @@ module Host =
             Win32.pidOfWindow(nativeint app.HWND)
         with _ ->
             None
+
+    /// 当前图纸的名字与落盘路径；一张图都没有就是 (None, None)
+    let private activeDrawing (app: AcadApplication) : string option * string option =
+        try
+            let doc = app.ActiveDocument
+            Some doc.Name, Paths.canonical doc.FullName
+        with _ ->
+            None, None
+
+    /// 按插件抄下来的 info 精确挂回那一只 AutoCAD 实例。
+    /// 只附着、不新建、不 Quit、不改应用状态 —— 冷启动分钟级，这里连碰都不会碰新建那条路。
+    /// 返回的 AcadApplication 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
+    let GetApplication (info: AppInfo) : Result<AcadApplication, string> =
+        AppInfo.attach info AppKind.AutoCAD progIds (fun raw ->
+            try
+                let app = raw :?> AcadApplication
+
+                match pidOf app with
+                | Some number when number <> info.Pid ->
+                    Error(sprintf "ROT 名字指向的是 PID %d，不是黑板上的 %d" number info.Pid)
+                | _ ->
+                    let name, path = activeDrawing app
+                    AppInfo.checkDoc info name path |> Result.map(fun () -> app)
+            with ex ->
+                Error(Errors.explain ex))
+
+    // ---------------- 认自己是谁 ----------------
+    // 地址里的指纹就是从这儿来的：哪个进程、锚定哪张图、那张图最后什么时候存的。
 
     /// 图纸有没有未保存改动（部分版本/接口上不一定有，取不到就当没有）
     let private docSaved (doc: obj) : bool option =

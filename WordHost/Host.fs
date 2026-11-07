@@ -35,8 +35,7 @@ module Host =
     let TryGetRunningApplication () : Application option =
         Com.running progIds |> Option.map(fun value -> value :?> Application)
 
-    // ---------------- 认自己是谁 ----------------
-    // 地址里的指纹就是从这儿来的：哪个进程、锚定哪份文档、那份文档最后什么时候存的。
+    // ---------------- 黑板模式：按 info 挂回现成的那一只 ----------------
 
     /// 这只 Word 主窗口的进程号。Word 的 Application 没有 Hwnd，只能从文档窗口往上找 OpusApp；
     /// 一份文档都没有时压根没有文档窗口 → None（调用方会退到别的办法）。
@@ -45,6 +44,35 @@ module Host =
             Win32.pidOfWindow(Win32.root(nativeint app.ActiveWindow.Hwnd))
         with _ ->
             None
+
+    /// 当前文档的名字与落盘路径；一份文档都没有就是 (None, None)
+    let private activeDoc (app: Application) : string option * string option =
+        try
+            let doc = app.ActiveDocument
+            Some doc.Name, Paths.canonical doc.FullName
+        with _ ->
+            None, None
+
+    /// 按插件抄下来的 info 精确挂回那一只 Word 实例。
+    /// 只附着、不新建、不 Quit、不改应用状态（连 DisplayAlerts 都不碰）—— 黑板的生命周期不归这儿管。
+    /// 返回的 Application 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
+    /// 种类不符 / 信息过时 / ROT 里没有这个名字 / 认错进程 / 文档被换过，一律 Error。
+    let GetApplication (info: AppInfo) : Result<Application, string> =
+        AppInfo.attach info AppKind.Word progIds (fun raw ->
+            try
+                let app = raw :?> Application
+
+                match pidOf app with
+                | Some number when number <> info.Pid ->
+                    Error(sprintf "ROT 名字指向的是 PID %d，不是黑板上的 %d" number info.Pid)
+                | _ ->
+                    let name, path = activeDoc app
+                    AppInfo.checkDoc info name path |> Result.map(fun () -> app)
+            with ex ->
+                Error(Errors.explain ex))
+
+    // ---------------- 认自己是谁 ----------------
+    // 地址里的指纹就是从这儿来的：哪个进程、锚定哪份文档、那份文档最后什么时候存的。
 
     /// 现场：进程号 + 锚定的文档（活动文档）+ 那份文档在磁盘上的最后写入时间 + 有没有未保存改动。
     /// 新文档（还没存过盘）路径是 None、保存时间是 0。

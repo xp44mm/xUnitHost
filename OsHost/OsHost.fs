@@ -1,4 +1,4 @@
-/// 操作系统这一层：线程（STA）、进程（账本 / 启动时间 / 等它退 / 结束它）、
+﻿/// 操作系统这一层：线程（STA）、进程（账本 / 启动时间 / 等它退 / 结束它）、
 /// 窗口（hwnd → 进程号）、时间（Unix 毫秒）、文件（规整路径 / 最后写入时间）、
 /// COM 底层（运行对象表 / CoCreateInstance）、异常归因。
 ///
@@ -16,6 +16,7 @@ open System.Collections.Concurrent
 open System.Diagnostics
 open System.IO
 open System.Runtime.InteropServices
+open System.Runtime.InteropServices.ComTypes
 open System.Threading
 open System.Threading.Tasks
 
@@ -158,6 +159,17 @@ module Proc =
             with _ ->
                 None
 
+    /// 进程的可执行文件路径（核对黑板上的 EXE 路径用）；取不到返回 None。
+    let exePath (pid: int) : string option =
+        if pid <= 0 then
+            None
+        else
+            try
+                use proc = Process.GetProcessById pid
+                Some proc.MainModule.FileName
+            with _ ->
+                None
+
     /// 等这些进程真的消失（Quit 是异步的：只投递 WM_QUIT，进程还要一会儿才走）。
     /// 返回超时后还活着的那些。
     let waitGone (image: string) (pids: Set<int>) (timeoutMs: int) : Set<int> =
@@ -258,6 +270,54 @@ module Com =
 
     let private iidUnknown = Guid "00000000-0000-0000-C000-000000000046"
 
+    /// 按注册名精确读 ROT 用的两条 API。插件侧用 CreateItemMoniker("!", 名字) + Register 登记，
+    /// 消费侧造同一个 moniker 用 GetObject 取回来 —— 不枚举、不用 GetActiveObject 猜实例。
+    [<DllImport("ole32.dll")>]
+    extern int GetRunningObjectTable(int reserved, nativeint& pprot)
+
+    [<DllImport("ole32.dll", CharSet = CharSet.Unicode)>]
+    extern int CreateItemMoniker(string delim, string name, nativeint& ppmk)
+
+    /// 把 P/Invoke 交回来的 IUnknown 裸指针变成 RCW，并把原生那一份引用放掉。
+    let private comObject (punk: nativeint) : obj option =
+        if punk = IntPtr.Zero then
+            None
+        else
+            try
+                Some(Marshal.GetObjectForIUnknown punk)
+            finally
+                // GetObjectForIUnknown 自己加过一次引用，这里放开 P/Invoke 交回来的那份
+                Marshal.Release punk |> ignore
+
+    /// 打开 ROT，拿到 IRunningObjectTable（RCW 由 GC 收，原生引用已放掉）
+    let private runningTable () : IRunningObjectTable option =
+        let mutable punk = IntPtr.Zero
+
+        if GetRunningObjectTable(0, &punk) <> 0 then
+            None
+        else
+            match comObject punk with
+            | Some raw -> Some(raw :?> IRunningObjectTable)
+            | None -> None
+
+    /// 造一个 item moniker。ROT 里的名字形如 !WordVSTO.Instance.27232，
+    /// "!" 是分隔符，后面整串是对象名。
+    let private itemMoniker (rotName: string) : IMoniker option =
+        if String.IsNullOrWhiteSpace rotName then
+            None
+        else
+            let delim, item =
+                if rotName.StartsWith "!" then "!", rotName.Substring 1 else "!", rotName
+
+            let mutable punk = IntPtr.Zero
+
+            if CreateItemMoniker(delim, item, &punk) <> 0 then
+                None
+            else
+                match comObject punk with
+                | Some raw -> Some(raw :?> IMoniker)
+                | None -> None
+
     let private withClsid (progId: string) (work: Guid -> 'T option) : 'T option =
         let mutable clsid = Guid.Empty
 
@@ -312,3 +372,41 @@ module Com =
                     + "：对应程序未安装，或从未成功启动过。"
                 )
             )
+
+    /// 按 ROT 注册名精确取现成实例（例：!WordVSTO.Instance.27232）。**绝不新建**：
+    /// 名字没登记、登记的实例已经退出，都只返回 None。多实例机器上这是唯一不会认错人的挂法。
+    let runningAt (rotName: string) : obj option =
+        if String.IsNullOrWhiteSpace rotName then
+            None
+        else
+            try
+                match runningTable (), itemMoniker rotName with
+                | Some table, Some moniker ->
+                    let mutable value: obj = null
+
+                    if table.GetObject(moniker, &value) <> 0 || isNull value then
+                        None
+                    else
+                        Some value
+                | _ -> None
+            with _ ->
+                None
+
+    /// 自测 / 提供黑板的一侧：把自己创建的托管对象登记到 ROT（强注册），返回 cookie。
+    /// 坑：拿别人的 COM 代理来登记会 E_INVALIDARG，这里只登记自己 new 出来的对象。
+    let register (rotName: string) (value: obj) : Result<int, string> =
+        try
+            match runningTable (), itemMoniker rotName with
+            | Some table, Some moniker -> Ok(table.Register(1, value, moniker))
+            | _ -> Error "打开 ROT / 造 moniker 失败"
+        with ex ->
+            Error(Errors.explain ex)
+
+    /// 撤掉 register 登记的条目（cookie 就是 register 返回的那个值）。
+    let revoke (cookie: int) : unit =
+        try
+            match runningTable () with
+            | Some table -> table.Revoke cookie
+            | None -> ()
+        with _ ->
+            ()

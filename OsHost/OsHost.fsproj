@@ -18,6 +18,8 @@
 
   <ItemGroup>
     <Compile Include="OsHost.fs" />
+    <!-- 黑板模式：插件抄下来的实例信息 + 按 ROT 名字精确认人（四家 host 共用） -->
+    <Compile Include="AppInfo.fs" />
     <Compile Include="Address.fs" />
     <Compile Include="ProcHost.fs" />
   </ItemGroup>

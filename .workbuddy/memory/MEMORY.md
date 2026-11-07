@@ -32,6 +32,13 @@
 - **合作（方式二）** `openSession` → `execByAddress` → `close`：多步、每步看上一步结果、跨进程交接。
 - 地址 = `种类:pid:进程启动毫秒:最后保存毫秒:路径指纹:归属`；每步用 `exec` 返回的**新地址**（保存过就变，老地址作废）；`openSession` 可新建，`resolve` **绝不新建**；只关 `Owned=true` 的，用户手上的实例一个字不动。
 
+## 黑板模式（2026-11-07）
+- 场景：插件（WordVSTO / ExcelVSTO）把当前实例抄到黑板上（采集时间 / PID / ROT 名 `!WordVSTO.Instance.<pid>` / HWND / EXE / 文档 / 路径）；WorkBuddy 只按 info 挂回那一只实例读写，**不负责创建销毁**，不并行，交接要完整不过时。
+- `OsHost/AppInfo.fs`：`AppInfo` + `ofText` / `ofParts` / `verify` / `ensureKind` / `checkDoc` / `attach`；`OsHost.Com.runningAt` 按 moniker 名字取 ROT（不枚举、不退回 GetActiveObject、不新建），`register` / `revoke` 供自测。
+- 四家 `Host.GetApplication(info)` 形状对称（Word / Excel / PowerPoint / AutoCAD）：失败一律 `Error`，绝不新建 / Quit / 改 `DisplayAlerts`；返回的 Application 与后续读写都包 `OsHost.Sta.run`（固定长活 STA 线程）。
+- 验证 `xUnitHost/BlackboardTest.fs` 五条 Fact：`-method "*黑板*"`；真机那条设 `XUNITHOST_BLACKBOARD_FILE`。
+- 项目根已 `git init`（初始提交 `54db328`），后续用 git 快照回退，不再用带时间戳的备份副本。
+
 ## 测试风格
 - 一个类 + 构造函数拿 `ITestOutputHelper`；Fact 写作 `member this.``中文一句话``()`，不用模块级 `let`。
 - 断言 `Should.equal 期望 实际`（`open FSharp.xUnit`），其余 `Assert.*`。

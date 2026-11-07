@@ -20,6 +20,12 @@
   直接 P/Invoke `ole32` / `oleaut32`（`CLSIDFromProgID` + `GetActiveObject`）。
 - **ROT 的 `Register` 是给服务端用的**：客户端拿别人的代理去登记，flags 0/1/2/3 全 `E_INVALIDARG`。
   Office 自己已经登记好了，客户端只用 `GetActiveObject`。
+- **黑板模式按名字取 ROT**：VSTO 插件用 `CreateItemMoniker("!", "WordVSTO.Instance.<pid>")` 登记；
+  消费侧造同一个 moniker 用 `IRunningObjectTable.GetObject` 取回（`OsHost.Com.runningAt`）。
+  别枚举 ROT，更别退回 `GetActiveObject` —— 多实例机器上那等于认错人。自测要登记就登记自己 new 的托管对象，
+  并记得 `Revoke`。
+- **返回的 Application 不能跨临时 STA 线程**：`GetApplication` 在 `Sta.run` 固定长活线程上附着，
+  后续读写也包 `Sta.run`；用 `Sta.here` 的临时线程一退出，就没人给这个 RCW 泵消息了。
 - **`AccessibleObjectFromWindow` + `OBJID_NATIVEOM` 要求最内层文档窗口**：Word 是 `_WwG`、
   Excel 是 `EXCEL7`（XLDESK 的子窗口），敲在顶层 `OpusApp`/`XLMAIN` 上一律 `E_FAIL`。
 

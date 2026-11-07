@@ -281,6 +281,16 @@ bash .workbuddy/skills/office-host-collaboration/scripts/run-facts.sh -a -n   # 
 脚本在跑之前先给本机的 `WINWORD` / `EXCEL` / `acad` 拍个快照，跑完再拍一次：
 **多出来的**进程算「没关干净」（脚本返回 1），**本来就在跑的**只列出来，不会被误认。
 
+## 黑板模式（插件抄现场 → 按 info 挂回现成实例）
+
+插件把「当前实例」抄到黑板上（采集时间 / PID / ROT 名 / HWND / EXE / 文档 / 路径），
+WorkBuddy 只读写、**不负责黑板的创建与销毁**。四家 host 各有一个
+`GetApplication(info) : Result<Application,string>`：按 ROT 名字精确附着 + 现场校验，
+绝不新建、绝不 Quit、不改应用状态；信息过时 / 种类错配 / 认错进程 / 文档被换过就 `Error`。
+共用件在 `OsHost/AppInfo.fs` + `OsHost.Com.runningAt`，完整 API 见 `references/api.md`。
+验证 `xUnitHost/BlackboardTest.fs`（`-method "*黑板*"`），真机那条靠 `XUNITHOST_BLACKBOARD_FILE`。
+返回的 Application 与后续读写都放在 `OsHost.Sta.run` 那条固定 STA 线程上。
+
 ## 汇报格式
 
 做完给用户四段，缺一不可：
