@@ -333,3 +333,87 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                     good.Length
                     removed
                     info.Pid)
+
+    /// 验一张那轮 Excel 把原件从 683520 B 改写成了 684032 B，且没生成 .xlsx。
+    /// 下一轮重跑前先把原件恢复成目录外备份里的原始字节：备份与留档 md5 必须一致才动手，
+    /// 已有新格式文件 / 原件已入回收站就停下，绝不覆盖已完成的转换成果。
+    [<Fact>]
+    member this.``还原验一张那份 xls：从目录外备份恢复原始字节``() =
+        match RealFolder.root () with
+        | None -> Assert.Skip "设 XUNITHOST_CONVERT_DIR=<目录> 才还原"
+        | Some root ->
+            Assert.True(Directory.Exists root, sprintf "目录不存在：%s" root)
+
+            let md5 (path: string) =
+                use stream = File.OpenRead path
+                use alg = System.Security.Cryptography.MD5.Create()
+                System.Convert.ToHexString(alg.ComputeHash stream)
+
+            let take = Paths.limitFromEnv () |> Option.defaultValue 1
+            let items = Paths.selectForRound root Paths.Kind.Xls (Paths.scan root) |> List.truncate take
+            Should.equal 1 items.Length
+
+            let source = items.Head.Source
+            let rel = RealFolder.rel root source
+            let backup = Path.Combine(RealFolder.backupRoot root, rel)
+            let projectRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."))
+
+            let keep =
+                match Environment.GetEnvironmentVariable "XUNITHOST_RESTORE_KEEP" with
+                | null
+                | "" -> Path.Combine(projectRoot, "TestResults", "验一张-转换前原件.xls")
+                | value -> value
+
+            let targets = Paths.existingTargetsOf source
+
+            Report.title output "还原验一张那份 .xls：从目录外备份恢复原始字节"
+            Report.line output "目标" rel
+            Report.line output "备份" backup
+            Report.line output "留档" keep
+
+            if not (File.Exists source) then
+                Assert.Skip "原件已不在（已转换并入回收站），无需还原"
+
+            Assert.True(File.Exists backup, sprintf "备份不在：%s" backup)
+            Assert.True(File.Exists keep, sprintf "留档不在：%s" keep)
+
+            let hashBefore, hashBackup, hashKeep = md5 source, md5 backup, md5 keep
+            let sizeBefore = (FileInfo source).Length
+
+            Report.line
+                output
+                "还原前"
+                (sprintf
+                    "原件 %d B md5=%s；备份 %d B md5=%s；留档 %d B md5=%s"
+                    sizeBefore
+                    hashBefore
+                    (FileInfo backup).Length
+                    hashBackup
+                    (FileInfo keep).Length
+                    hashKeep)
+
+            Report.line output "已有新格式" (sprintf "%d 个（有就别覆盖原件）" targets.Length)
+            Should.equal 0 targets.Length
+            Should.equal hashBackup hashKeep
+
+            let changed =
+                if hashBefore = hashBackup then
+                    false
+                else
+                    let info = FileInfo source
+                    if info.IsReadOnly then info.IsReadOnly <- false
+                    File.Copy(backup, source, true)
+                    true
+
+            let sizeAfter = (FileInfo source).Length
+            let hashAfter = md5 source
+
+            Report.line output "复制" (if changed then "备份 → 原件（覆盖）" else "原件已是原始字节，一个字节没动")
+            Report.line output "还原后" (sprintf "%d B md5=%s" sizeAfter hashAfter)
+            Should.equal hashBackup hashAfter
+            Should.equal (FileInfo backup).Length sizeAfter
+            Should.equal hashBackup (md5 backup)
+            Should.equal hashKeep (md5 keep)
+
+            Report.line output "备份留档" (sprintf "备份 %d B / 留档 %d B，md5 都没变" (FileInfo backup).Length (FileInfo keep).Length)
+            Report.conclusion output (sprintf "完成：%s 恢复到 %d B 原始字节，备份与留档原样保留" rel sizeAfter)
