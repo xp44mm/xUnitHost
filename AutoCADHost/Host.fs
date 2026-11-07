@@ -45,17 +45,11 @@ module Host =
         with _ ->
             None
 
-    /// 当前图纸的名字与落盘路径；一张图都没有就是 (None, None)
-    let private activeDrawing (app: AcadApplication) : string option * string option =
-        try
-            let doc = app.ActiveDocument
-            Some doc.Name, Paths.canonical doc.FullName
-        with _ ->
-            None, None
-
     /// 按插件抄下来的 info 精确挂回那一只 AutoCAD 实例。
     /// 只附着、不新建、不 Quit、不改应用状态 —— 冷启动分钟级，这里连碰都不会碰新建那条路。
     /// 返回的 AcadApplication 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
+    /// 文档级交接检查（换了图纸 / 采集后存过盘等）按用户要求推迟，暂不做；
+    /// info 里的 DocName / DocPath 只是收下的数据，不参与判断。
     let GetApplication (info: AppInfo) : Result<AcadApplication, string> =
         AppInfo.attach info AppKind.AutoCAD progIds (fun raw ->
             try
@@ -64,9 +58,7 @@ module Host =
                 match pidOf app with
                 | Some number when number <> info.Pid ->
                     Error(sprintf "ROT 名字指向的是 PID %d，不是黑板上的 %d" number info.Pid)
-                | _ ->
-                    let name, path = activeDrawing app
-                    AppInfo.checkDoc info name path |> Result.map(fun () -> app)
+                | _ -> Ok app
             with ex ->
                 Error(Errors.explain ex))
 

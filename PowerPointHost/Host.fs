@@ -39,17 +39,11 @@ module Host =
         with _ ->
             None
 
-    /// 当前演示文稿的名字与落盘路径；一份都没开就是 (None, None)
-    let private activePresentation (app: Application) : string option * string option =
-        try
-            let show = app.ActivePresentation
-            Some show.Name, Paths.canonical show.FullName
-        with _ ->
-            None, None
-
     /// 按插件抄下来的 info 精确挂回那一只 PowerPoint 实例。
     /// 只附着、不新建、不 Quit、不改应用状态 —— 黑板的生命周期不归这儿管。
     /// 返回的 Application 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
+    /// 文档级交接检查（换了演示文稿 / 采集后存过盘等）按用户要求推迟，暂不做；
+    /// info 里的 DocName / DocPath 只是收下的数据，不参与判断。
     let GetApplication (info: AppInfo) : Result<Application, string> =
         AppInfo.attach info AppKind.PowerPoint progIds (fun raw ->
             try
@@ -58,9 +52,7 @@ module Host =
                 match pidOf app with
                 | Some number when number <> info.Pid ->
                     Error(sprintf "ROT 名字指向的是 PID %d，不是黑板上的 %d" number info.Pid)
-                | _ ->
-                    let name, path = activePresentation app
-                    AppInfo.checkDoc info name path |> Result.map(fun () -> app)
+                | _ -> Ok app
             with ex ->
                 Error(Errors.explain ex))
 

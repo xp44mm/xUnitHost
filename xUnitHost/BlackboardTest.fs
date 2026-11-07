@@ -1,6 +1,7 @@
 ﻿/// 黑板模式：插件把「当前实例」抄到黑板上，WorkBuddy 只读写、不负责黑板的创建与销毁。
 /// 生产库只认结构化参数表 AppInfo；把展示文本填成参数表的参考实现在 BlackboardText.fs（只供调用方参考）。
 /// 这里验证四家 GetApplication(info) 的入口：参数表、认人、按 ROT 名字精确附着、拒接过时的信息。
+/// 文档级交接检查（换了文档 / 文档关了 / 采集后存过盘）按用户要求推迟（2026-11-07 13:51），两路都不做。
 /// 全部只读本机进程与 ROT，绝不新建 / 关闭 Word / Excel / PowerPoint / AutoCAD。
 namespace XUnitHost
 
@@ -150,43 +151,8 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
 
         Report.conclusion output "通过：四家都没起进程，过时报过时、错配报不接"
 
-    [<Fact>]
-    member this.``黑板模式 文档级校验：换了文档或采集后被保存就拒接``() =
-        Report.title output "黑板模式：附着后核对文档，保证数据完整不过时"
-
-        let path =
-            Path.Combine(Path.GetTempPath(), sprintf "xunithost-blackboard-%d.txt" Environment.ProcessId)
-
-        File.WriteAllText(path, "黑板")
-
-        try
-            let captured = Report.unixMs DateTime.Now
-            let baseInfo = AppInfo.create (AppKind.Word, 1, "", 0n, "", captured)
-            let info = { baseInfo with DocName = Some "文档1"; DocPath = Some path }
-
-            // 文件最后写入时间早于采集时刻：没被别人动过
-            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddHours(-1.0))
-            let aligned = AppInfo.checkDoc info (Some "文档1") (Some path)
-            Report.line output "一致" (sprintf "%A" aligned)
-            Should.equal true (match aligned with Ok _ -> true | _ -> false)
-
-            let changed = AppInfo.checkDoc info (Some "另一份.docx") (Some path)
-            Report.line output "换了文档" (sprintf "%A" changed)
-            Should.equal true (match changed with Error _ -> true | _ -> false)
-
-            let closed = AppInfo.checkDoc info None None
-            Report.line output "文档关了" (sprintf "%A" closed)
-            Should.equal true (match closed with Error _ -> true | _ -> false)
-
-            // 采集之后又存了一次盘：黑板信息已经过时
-            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddHours(1.0))
-            let saved = AppInfo.checkDoc info (Some "文档1") (Some path)
-            Report.line output "存过盘" (sprintf "%A" saved)
-            Should.equal true (match saved with Error _ -> true | _ -> false)
-
-            Report.conclusion output "通过：名字 / 路径一致才放行，换了文档或采集后存过盘就拒接"
-        finally
-            File.Delete path
+    // 文档级交接检查（换了文档 / 文档关了 / 采集后存过盘）按用户要求推迟（2026-11-07 13:51）：
+    // 这条 Fact 与两路库里的 checkDoc 一起撤掉了；要找回旧实现看 git 历史（6be1725 之前）。
 
     [<Fact>]
     member this.``ROT 按名字取回黑板登记的对象，名字不在就报 None``() =

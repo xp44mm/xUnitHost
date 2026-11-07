@@ -6,7 +6,7 @@
 ///   · 「怎么拿到现成对象」「拿到 obj 之后怎么转强类型、核身份」用**获取函数**占位：
 ///     attachWith 的 acquire / work 两个参数，库一行 Office 类型都不认，也绝不新建实例。
 /// 于是第五家、第十家不用改库；四家 host 要不要搬过来，由调用方自己决定。
-/// 校验口径（进程 / 启动时间 / HWND / EXE / ROT 后缀 / 文档没被换或存过）与 AppInfo 一致。
+/// 校验口径（进程 / 启动时间 / HWND / EXE / ROT 后缀）与 AppInfo 一致；文档级交接检查两路都推迟。
 ///
 /// 原文件 OsHost/AppInfo.fs 与四家 host 的 GetApplication(info) 一行未动，两条路并存。
 namespace OsHost
@@ -155,36 +155,9 @@ module GeneralAppInfo =
         else
             Ok()
 
-    /// 挂上之后再核一次「黑板上那份文档还是不是现在这份」：
-    /// 名字 / 路径不符，或文件在采集之后被保存过，都说明中途有别的东西动过 —— 拒接。
-    /// 参数表里没填文档行就跳过这一层。
-    let checkDoc
-        (info: GeneralAppInfo)
-        (currentName: string option)
-        (currentPath: string option)
-        : Result<unit, string> =
-        let same (left: string) (right: string) =
-            String.Equals(left, right, StringComparison.OrdinalIgnoreCase)
-
-        let checks =
-            [ ( (match info.DocName, currentName with
-                 | Some expected, Some actual -> not (same expected actual)
-                 | Some _, None -> true
-                 | _ -> false),
-                sprintf "当前文档与黑板信息不一致：黑板上是 %A，现在是 %A" info.DocName currentName )
-              ( (match info.DocPath, currentPath with
-                 | Some expected, Some actual -> not (same expected actual)
-                 | Some _, None -> true
-                 | _ -> false),
-                sprintf "当前文档路径与黑板信息不一致：黑板上是 %A，现在是 %A" info.DocPath currentPath )
-              ( (match info.DocPath with
-                 | Some path -> Paths.savedMs(Some path) > info.CapturedMs
-                 | None -> false),
-                sprintf "文档在采集时间 %s 之后被保存过：黑板信息已过时" (Clock.show info.CapturedMs) ) ]
-
-        match firstError checks with
-        | Some message -> Error message
-        | None -> Ok()
+    /// 文档级交接检查（换了文档 / 文档关了 / 采集后存过盘）按用户要求**推迟**（2026-11-07 13:51）：
+    /// 新路同样不做，`checkDoc` 已撤掉；要找回旧实现看 git 历史（`6be1725`）。
+    /// `GeneralAppInfo.DocName` / `DocPath` 字段保留：数据照收，只是暂不参与判断。
 
     /// 默认获取函数：按 ROT 名精确取；没填 ROT 名就按调用方给的 ProgID 列表找。
     /// 必须在 Sta.run 那条固定 STA 线程上被调用（attachWith 已保证）。

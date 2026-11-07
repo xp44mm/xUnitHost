@@ -122,7 +122,8 @@ module internal BlackboardText =
 
     /// 参考解析：插件剪贴板原文 / 会话里贴的一段 / 存下来的 txt → AppInfo 参数表。
     /// 缺 PID / 采集时间 / 认不出种类，一律 Error —— 信息不完整就不该往下走。
-    /// 注意这里只是「把展示文本填成参数表」，真正的校验在 OsHost.AppInfo.verify / checkDoc。
+    /// 注意这里只是「把展示文本填成参数表」，真正的现场校验在 OsHost.AppInfo.verify；
+    /// 文档级交接检查按用户要求推迟（2026-11-07 13:51），暂不做。
     let ofText (text: string) : Result<AppInfo, string> =
         if String.IsNullOrWhiteSpace text then
             Error "黑板信息是空的"

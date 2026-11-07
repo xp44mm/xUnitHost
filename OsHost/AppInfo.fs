@@ -152,32 +152,9 @@ module AppInfo =
         else
             Ok()
 
-    /// 挂上之后再核一次「黑板上那份文档还是不是现在这份」：
-    /// 名字 / 路径不符，或文件在采集之后被保存过，都说明中途有别的东西动过 —— 拒接。
-    /// 参数表里没填文档行就跳过这一层（老版插件只抄了五行）。
-    let checkDoc (info: AppInfo) (currentName: string option) (currentPath: string option) : Result<unit, string> =
-        let same (left: string) (right: string) =
-            String.Equals(left, right, StringComparison.OrdinalIgnoreCase)
-
-        let checks =
-            [ ( (match info.DocName, currentName with
-                 | Some expected, Some actual -> not (same expected actual)
-                 | Some _, None -> true
-                 | _ -> false),
-                sprintf "当前文档与黑板信息不一致：黑板上是 %A，现在是 %A" info.DocName currentName )
-              ( (match info.DocPath, currentPath with
-                 | Some expected, Some actual -> not (same expected actual)
-                 | Some _, None -> true
-                 | _ -> false),
-                sprintf "当前文档路径与黑板信息不一致：黑板上是 %A，现在是 %A" info.DocPath currentPath )
-              ( (match info.DocPath with
-                 | Some path -> Paths.savedMs(Some path) > info.CapturedMs
-                 | None -> false),
-                sprintf "文档在采集时间 %s 之后被保存过：黑板信息已过时" (Clock.show info.CapturedMs) ) ]
-
-        match firstError checks with
-        | Some message -> Error message
-        | None -> Ok()
+    /// 文档级交接检查（当前文档是否被换 / 被关 / 采集后存过盘）按用户要求**推迟**（2026-11-07 13:51）：
+    /// 两路库里都不再做，`checkDoc` 已撤掉；要找回旧实现看 git 历史（`6be1725` 之前）。
+    /// `AppInfo.DocName` / `DocPath` 字段保留：数据照收，只是暂不参与判断，以后要接回来再加。
 
     /// 四家 GetApplication 共用的一段：种类 → 现场校验 → 按 ROT 名取现成对象 → 交给各家强类型检查。
     /// 全程在**固定那条长活 STA 线程**上（Sta.run）：ROT 拿到的 RCW 和后面的强类型调用必须同公寓，

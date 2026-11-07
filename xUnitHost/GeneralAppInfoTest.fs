@@ -115,8 +115,8 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
         Report.conclusion output "通过：acquire 由调用方注入，按 ROT 名正向挂回；取不到 / 标记错配都明确拒接，四家进程没动"
 
     [<Fact>]
-    member this.``通用参数表 与 AppInfo 的现场校验与文档校验同口径``() =
-        Report.title output "通用参数表：与 AppInfo 逐项对照，校验口径没有丢"
+    member this.``通用参数表 与 AppInfo 的现场校验同口径``() =
+        Report.title output "通用参数表：与 AppInfo 逐项对照，现场校验口径没有丢"
 
         let captured = Report.unixMs DateTime.Now
         let oldInfo = AppInfo.create (AppKind.Word, 999999, "!WordVSTO.Instance.999999", 0n, "", captured)
@@ -132,29 +132,20 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
         Report.line output "新现场校验" (sprintf "%A" newVerify)
         Should.equal oldVerify newVerify
 
-        let path =
-            Path.Combine(Path.GetTempPath(), sprintf "xunithost-general-%d.txt" Environment.ProcessId)
+        // 文档级交接检查按用户要求推迟：字段照收、照抄，但不参与任何判断
+        let withDoc =
+            { oldInfo with
+                DocName = Some "文档1"
+                DocPath = Some @"C:\tmp\文档1.docx" }
 
-        File.WriteAllText(path, "通用参数表")
+        let genDoc = GeneralBridge.ofAppInfo withDoc
 
-        try
-            let old = { oldInfo with DocName = Some "文档1"; DocPath = Some path }
-            let gen = GeneralBridge.ofAppInfo old
+        Report.line
+            output
+            "文档字段"
+            (sprintf "旧 %A / %A，新 %A / %A" withDoc.DocName withDoc.DocPath genDoc.DocName genDoc.DocPath)
 
-            let pair (label: string) (currentName: string option) (currentPath: string option) =
-                let a = AppInfo.checkDoc old currentName currentPath
-                let b = GeneralAppInfo.checkDoc gen currentName currentPath
-                Report.line output label (sprintf "%A | %A" a b)
-                Should.equal a b
+        Should.equal withDoc.DocName genDoc.DocName
+        Should.equal withDoc.DocPath genDoc.DocPath
 
-            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddHours(-1.0))
-            pair "一致" (Some "文档1") (Some path)
-            pair "换了文档" (Some "另一份.docx") (Some path)
-            pair "文档关了" None None
-
-            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddHours(1.0))
-            pair "存过盘" (Some "文档1") (Some path)
-
-            Report.conclusion output "通过：同一条信息两张表，现场校验与四种文档情形逐项一致；旧表一行未改"
-        finally
-            File.Delete path
+        Report.conclusion output "通过：同一条信息两张表，现场校验一致；文档字段只收数据，交接检查按用户要求推迟"

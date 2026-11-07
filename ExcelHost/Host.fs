@@ -53,17 +53,11 @@ module Host =
         with _ ->
             None
 
-    /// 当前工作簿的名字与落盘路径；一本工作簿都没有就是 (None, None)
-    let private activeBook (app: Application) : string option * string option =
-        try
-            let book = app.ActiveWorkbook
-            Some book.Name, Paths.canonical book.FullName
-        with _ ->
-            None, None
-
     /// 按插件抄下来的 info 精确挂回那一只 Excel 实例。
     /// 只附着、不新建、不 Quit、不改应用状态 —— 黑板的生命周期不归这儿管。
     /// 返回的 Application 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
+    /// 文档级交接检查（换了工作簿 / 采集后存过盘等）按用户要求推迟，暂不做；
+    /// info 里的 DocName / DocPath 只是收下的数据，不参与判断。
     let GetApplication (info: AppInfo) : Result<Application, string> =
         AppInfo.attach info AppKind.Excel progIds (fun raw ->
             try
@@ -72,9 +66,7 @@ module Host =
                 match pidOf app with
                 | Some number when number <> info.Pid ->
                     Error(sprintf "ROT 名字指向的是 PID %d，不是黑板上的 %d" number info.Pid)
-                | _ ->
-                    let name, path = activeBook app
-                    AppInfo.checkDoc info name path |> Result.map(fun () -> app)
+                | _ -> Ok app
             with ex ->
                 Error(Errors.explain ex))
 

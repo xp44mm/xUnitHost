@@ -372,31 +372,37 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -noColor -showLiveOutput
   起最小必填集再 `with` 补 `DocName` / `DocPath`（2026-11-07 11:37 取代原模块函数 `ofParts`）。
   **成员函数**（2026-11-07 11:44）：`AppKind` 上 `kind.image()` = 进程名、`kind.kindName()` = 给人看的名字；
   `AppInfo` 上 `info.describe()` = 一行摘要。同名 `module AppInfo` 里只剩
-  `verify` / `ensureKind` / `checkDoc` / `attach`，它们内部改调这些成员。
+  `verify` / `ensureKind` / `attach`（+ 私有 `firstError`），它们内部改调这些成员。
   **库不解析文本**：`ofText` 与展示用的 `Title` 已从 `OsHost` 移除 —— 插件改标题、键名、措辞只该改调用方。
   采集时间由填报方给 Unix 毫秒，库不替你猜。
   `verify` 核「进程还在 / 启动时间不晚于采集 / HWND 仍属该 pid / EXE 一致 / ROT 名后缀 pid 一致」；
-  `ensureKind`；`checkDoc` 核「文档名字与路径一致、采集后没有再存盘」；`attach` = 种类 → 现场校验 → 按名取对象 → 交 work。
+  `ensureKind`；`attach` = 种类 → 现场校验 → 按名取对象 → 交 work。
+  **文档级交接检查推迟**（2026-11-07 13:51 用户定）：「换了文档 / 文档关了 / 采集后存过盘」这一层两路都不做，
+  `checkDoc` 已从 `AppInfo.fs` 与 `GeneralAppInfo.fs` 撤掉；`DocName` / `DocPath` 字段保留，数据照收、暂不参与判断。
+  旧实现可从 git 历史（`6be1725` 及之前）找回。
 - `OsHost.Com` 新增：`runningAt : string -> obj option`（`CreateItemMoniker("!", 名)` + `IRunningObjectTable.GetObject`，
   **不枚举 ROT、不退回 GetActiveObject、绝不新建**）、`register` / `revoke`（自测登记本地对象用）、
   `OsHost.Proc.exePath : int -> string option`。
 - 四家入口形状对称：`WordHost.Host.GetApplication : AppInfo -> Result<Application,string>`；
   `ExcelHost.Host.GetApplication` / `PowerPointHost.Host.GetApplication` /
   `AutoCADHost.Host.GetApplication : AppInfo -> Result<AcadApplication,string>`。
-  种类不符 / 信息过时 / ROT 里没这个名字 / pid 对不上 / 文档被换或被保存，一律 `Error`；
+  种类不符 / 信息过时 / ROT 里没这个名字 / pid 对不上，一律 `Error`；pid 对上就直接交回 Application
+  （13:51 起不再核当前文档，见上面的推迟说明）。
   绝不新建、绝不 Quit、不改 `DisplayAlerts`。`PowerPointHost.Host.pidOf` 用 `app.HWND`。
 - **公寓**：`attach` 走 `Sta.run` 固定长活 STA 线程；后续对 Application 的读写也包 `Sta.run`。
   一步做完就直接 `AppInfo.attach info kind progIds work`，别让 RCW 跑出临时 STA 线程。
 - **参考解析（不是库 API）**：`xUnitHost/BlackboardText.fs`，`module internal BlackboardText`：
   `caption`（只贴标题行给人看）/ `ofText : string -> Result<AppInfo,string>` —— 把插件复制的展示文本
   填成同一张参数表。格式强耦合的代码只留在这份里；用不上文本源的程序直接按字段填 `AppInfo`。
-- 验证：`xUnitHost/BlackboardTest.fs` 五条 Fact（`-method "*黑板*"`）；第一条同时验
+- 验证：`xUnitHost/BlackboardTest.fs` 四条 Fact（`-method "*黑板*"`）；第一条同时验
   「手工填报的参数表 == 参考解析出来的那条」；真机那条设
-  `XUNITHOST_BLACKBOARD_FILE=<剪贴板文本存的文件>`，不设就 Skip。
+  `XUNITHOST_BLACKBOARD_FILE=<剪贴板文本存的文件>`，不设就 Skip。原「文档级校验」那条 Fact 已随推迟决定撤掉。
 
 ### 另一条路：GeneralAppInfo（2026-11-07 12:01，用户要求「原文件不动，另起炉灶」）
 
-`OsHost/AppInfo.fs`、四家 `GetApplication(info)` 一行未动，两条路并存。新文件 `OsHost/GeneralAppInfo.fs`：
+12:01 落地时 `OsHost/AppInfo.fs`、四家 `GetApplication(info)` 确未动（提交 `6be1725`）；
+13:51 用户要求「文档级交接检查推迟」，两路库与四家入口才一起改，除此之外两条路仍并存。
+新文件 `OsHost/GeneralAppInfo.fs`：
 
 - `GeneralIdentity`：**参数占位**，取代 `AppKind` 上那两个 match —— `Image`（进程名）/ `Name`（显示名）/
   `Tag`（调用方自己的种类标记）；`static member create (image, name, tag)`。库只比字符串、不解释 Tag，
@@ -404,8 +410,8 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -noColor -showLiveOutput
 - `GeneralAppInfo`：纯参数表 `Identity/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath`，
   `static member create (identity, pid, rot, hwnd, exePath, capturedMs)` / `info.describe()`。
 - `module GeneralAppInfo`：`verify`（与 `AppInfo.verify` 同口径，另多一条「Image 为空」）、
-  `ensureTag`（比 Tag，不比枚举）、`checkDoc`（与 `AppInfo.checkDoc` 同文案）、
-  `defaultAcquire`（ROT 名优先，空则按 ProgID 列表）、
+  `ensureTag`（比 Tag，不比枚举）、`defaultAcquire`（ROT 名优先，空则按 ProgID 列表）、
+  （文档级 `checkDoc` 已按 13:51 的决定撤掉，字段保留不判断）
   **`attachWith info tag acquire work`** —— `acquire : GeneralAppInfo -> obj option` 与
   `work : obj -> Result<'T,string>` 是**获取函数占位**，由调用方注入；`attach` 是套默认 `defaultAcquire` 的便捷版。
   全程 `Sta.run` 固定 STA 线程；取不到就 `Error`，绝不新建 / Quit / 退回 GetActiveObject。
@@ -414,3 +420,4 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -noColor -showLiveOutput
 - 验证：三条 Fact，`-method "*通用参数表*"`。其中「获取函数占位」那条用 `Com.register` 在当前进程登记
   `BlackboardProbe`，`register / acquire / revoke` 都排在**同一条** `Sta.run` 线程上
   （避免跨公寓、也避免 `Sta.run` 嵌套），正向挂回 `Ok "XUnitHost.BlackboardProbe"` —— 不需要 Office 的完整附着链。
+  第三条现在只对照 `verify` 与文档字段照抄，不再验「换了文档 / 文档关了 / 存过盘」四种情形。
