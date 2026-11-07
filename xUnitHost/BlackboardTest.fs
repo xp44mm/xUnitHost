@@ -78,13 +78,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
 
         // 库入口真正要的是这张参数表：手工按字段填报，与参考解析出来的那条应完全相同。
         let filled =
-            { (AppInfo.ofParts
-                AppKind.Word
-                27232
-                "!WordVSTO.Instance.27232"
-                (nativeint 0x002304FA)
-                @"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE"
-                word.CapturedMs)
+            { (AppInfo.create (AppKind.Word, 27232, "!WordVSTO.Instance.27232", (nativeint 0x002304FA), @"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE", word.CapturedMs))
               with DocName = Some "文档1"; DocPath = None }
 
         Report.line output "手工填报" (AppInfo.describe filled)
@@ -123,7 +117,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         let before = images |> List.map(fun image -> image, Report.procIds image)
 
         let captured = Report.unixMs DateTime.Now
-        let dead = AppInfo.ofParts AppKind.Word 999999 "!WordVSTO.Instance.999999" 0n "" captured
+        let dead = AppInfo.create (AppKind.Word, 999999, "!WordVSTO.Instance.999999", 0n, "", captured)
         Report.line output "输入" (AppInfo.describe dead)
 
         let word = WordHost.Host.GetApplication dead
@@ -167,7 +161,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
 
         try
             let captured = Report.unixMs DateTime.Now
-            let baseInfo = AppInfo.ofParts AppKind.Word 1 "" 0n "" captured
+            let baseInfo = AppInfo.create (AppKind.Word, 1, "", 0n, "", captured)
             let info = { baseInfo with DocName = Some "文档1"; DocPath = Some path }
 
             // 文件最后写入时间早于采集时刻：没被别人动过

@@ -3,7 +3,7 @@
 /// 生产库 OsHost 只认 AppInfo 那张参数表：调用方（插件 / 宿主程序）按字段填报，
 /// 库不认文本、不解析排版。插件改了标题、键名、措辞，只改这一份参考代码，不动库。
 /// 用不上文本源的程序请直接填参数表：
-///   { (AppInfo.ofParts AppKind.Word 27232 "!WordVSTO.Instance.27232" 0n "" captured)
+///   { (AppInfo.create (AppKind.Word, 27232, "!WordVSTO.Instance.27232", 0n, "", captured))
 ///       with DocName = Some "文档1" }
 /// 解析出来的字段与手工填报的字段完全相同，四家 GetApplication(info) 分不出来源。
 namespace XUnitHost

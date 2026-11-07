@@ -288,7 +288,7 @@ bash .workbuddy/skills/office-host-collaboration/scripts/run-facts.sh -a -n   # 
 WorkBuddy 只读写、**不负责黑板的创建与销毁**。四家 host 各有一个
 `GetApplication(info) : Result<Application,string>`：按 ROT 名字精确附着 + 现场校验，
 绝不新建、绝不 Quit、不改应用状态；信息过时 / 种类错配 / 认错进程 / 文档被换过就 `Error`。
-**`AppInfo` 是结构化参数表，调用方按字段填报**，`OsHost` 里没有文本解析（`ofText` 已移出生产库）；
+**`AppInfo` 是结构化参数表，调用方按字段填报**（直接构造记录，或用类型上的静态构造成员 `AppInfo.create(...)` 起最小集再 `with` 补齐），`OsHost` 里没有文本解析（`ofText` 已移出生产库）；
 把插件展示文本填成参数表的参考写法是测试项目 `xUnitHost/BlackboardText.fs`
 （`BlackboardText.ofText`，只供参考、不是库 API），插件改排版只改这一份。
 共用件在 `OsHost/AppInfo.fs` + `OsHost.Com.runningAt`，完整 API 见 `references/api.md`。

@@ -19,7 +19,8 @@ type AppKind =
     | AutoCAD
 
 /// 调用方要填的那张参数表：一条实例信息的全部字段，都是结构化值，没有一行展示文本。
-/// 直接构造记录即可（`{ Kind = ...; Pid = ...; ... }`），也可以用下面的 ofParts 起个最小集再 with 补齐。
+/// 直接构造记录即可（`{ Kind = ...; Pid = ...; ... }`），也可以用静态构造成员
+/// `AppInfo.create(...)` 起个最小集再 with 补齐。
 type AppInfo =
     { Kind: AppKind
       Pid: int
@@ -31,6 +32,22 @@ type AppInfo =
       CapturedMs: int64
       DocName: string option
       DocPath: string option }
+
+    /// 静态构造成员：调用方按最小必填集填报结构化数据。文档名 / 路径按记录更新补上，例如：
+    ///   { (AppInfo.create (AppKind.Word, 27232, "!WordVSTO.Instance.27232", 0n, "", captured))
+    ///       with DocName = Some "文档1"; DocPath = None }
+    /// 采集时间由填报方给出（Unix 毫秒），库不替你猜，也不从任何文本里读。
+    static member create
+        (kind: AppKind, pid: int, rot: string, hwnd: nativeint, exePath: string, capturedMs: int64)
+        : AppInfo =
+        { Kind = kind
+          Pid = pid
+          Rot = rot
+          Hwnd = hwnd
+          ExePath = exePath
+          CapturedMs = capturedMs
+          DocName = None
+          DocPath = None }
 
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
 module AppInfo =
@@ -48,27 +65,6 @@ module AppInfo =
         | AppKind.Excel -> "Excel"
         | AppKind.PowerPoint -> "PowerPoint"
         | AppKind.AutoCAD -> "AutoCAD"
-
-    /// 参数表的便捷构造（最小必填集）。文档名 / 路径按记录更新补上，例如：
-    ///   { (AppInfo.ofParts AppKind.Word 27232 "!WordVSTO.Instance.27232" 0n "" captured)
-    ///       with DocName = Some "文档1"; DocPath = None }
-    /// 采集时间由填报方给出（Unix 毫秒），库不替你猜，也不从任何文本里读。
-    let ofParts
-        (kind: AppKind)
-        (pid: int)
-        (rot: string)
-        (hwnd: nativeint)
-        (exePath: string)
-        (capturedMs: int64)
-        : AppInfo =
-        { Kind = kind
-          Pid = pid
-          Rot = rot
-          Hwnd = hwnd
-          ExePath = exePath
-          CapturedMs = capturedMs
-          DocName = None
-          DocPath = None }
 
     let describe (info: AppInfo) : string =
         sprintf
