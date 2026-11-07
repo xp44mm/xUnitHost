@@ -1,5 +1,6 @@
-﻿/// 通用参数表 GeneralAppInfo 的验证：与 AppKind 解耦之后，认人 / 校验 / 附着还灵不灵。
-/// 这三条 Fact 全部只读本机进程与 ROT，绝不新建 / 关闭 Word / Excel / PowerPoint / AutoCAD。
+﻿/// 通用参数表 GeneralAppInfo 的验证：身份由各家专用 Host 的参数给出，认人 / 校验 / 附着还灵不灵。
+/// 旧路 AppInfo / AppKind 已删除；这里的三条 Fact 全部只读本机进程与 ROT，
+/// 绝不新建 / 关闭 Word / Excel / PowerPoint / AutoCAD。
 namespace XUnitHost
 
 open System
@@ -8,37 +9,17 @@ open Xunit
 open FSharp.xUnit
 open OsHost
 
-/// 调用方适配示例（**不是库 API**）：把老参数表里的封闭种类翻成通用身份参数。
-/// 生产层 GeneralAppInfo 不知道 AppKind 存在；要不要从旧表搬过来，是调用方自己的事。
-module internal GeneralBridge =
-
-    let identityOf (kind: AppKind) : GeneralIdentity =
-        let tag =
-            match kind with
-            | AppKind.Word -> "word"
-            | AppKind.Excel -> "excel"
-            | AppKind.PowerPoint -> "ppt"
-            | AppKind.AutoCAD -> "acad"
-
-        GeneralIdentity.create (kind.image(), kind.kindName(), tag)
-
-    let ofAppInfo (info: AppInfo) : GeneralAppInfo =
-        { (GeneralAppInfo.create
-            (identityOf info.Kind, info.Pid, info.Rot, info.Hwnd, info.ExePath, info.CapturedMs))
-          with
-              DocName = info.DocName
-              DocPath = info.DocPath }
-
 type GeneralAppInfoTest(output: ITestOutputHelper) =
 
     [<Fact>]
-    member this.``通用参数表 身份由参数填，第五家不用改库``() =
-        Report.title output "通用参数表：身份由参数填，不认 AppKind"
+    member this.``通用参数表 身份常量在四家专用 Host，第五家不用改库``() =
+        Report.title output "通用参数表：四家身份常量在专用 Host，第五家不用改库"
 
-        let word = GeneralIdentity.create ("WINWORD", "Word", "word")
-        let excel = GeneralIdentity.create ("EXCEL", "Excel", "excel")
-        let ppt = GeneralIdentity.create ("POWERPNT", "PowerPoint", "ppt")
-        let acad = GeneralIdentity.create ("acad", "AutoCAD", "acad")
+        // 原来 AppKind.image() / kindName() 四个分支的值，现在各归各家 Host 的 SelfIdentity
+        let word = WordHost.Host.SelfIdentity
+        let excel = ExcelHost.Host.SelfIdentity
+        let ppt = PowerPointHost.Host.SelfIdentity
+        let acad = AutoCADHost.Host.SelfIdentity
         let fifth = GeneralIdentity.create ("et", "WPS 表格", "et")
 
         for identity in [ word; excel; ppt; acad; fifth ] do
@@ -46,6 +27,8 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
 
         Should.equal "WINWORD" word.Image
         Should.equal "Word" word.Name
+        Should.equal "EXCEL" excel.Image
+        Should.equal "POWERPNT" ppt.Image
         Should.equal "acad" acad.Tag
         Should.equal "et" fifth.Image
 
@@ -61,7 +44,7 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
         Should.equal true (match right with Ok () -> true | _ -> false)
         Should.equal true (match wrong with Error message -> message.Contains "不接" | _ -> false)
 
-        Report.conclusion output "通过：四家 + 第五家的身份都是三个参数，库里没有 AppKind；标记错配就拒接"
+        Report.conclusion output "通过：四家 + 第五家的身份都是 Host 上的三个参数，库里没有封闭种类；标记错配就拒接"
 
     [<Fact>]
     member this.``通用参数表 获取函数占位：注入 acquire 挂到登记对象，不需要 Office``() =
@@ -115,37 +98,57 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
         Report.conclusion output "通过：acquire 由调用方注入，按 ROT 名正向挂回；取不到 / 标记错配都明确拒接，四家进程没动"
 
     [<Fact>]
-    member this.``通用参数表 与 AppInfo 的现场校验同口径``() =
-        Report.title output "通用参数表：与 AppInfo 逐项对照，现场校验口径没有丢"
+    member this.``通用参数表 四家 Host 各用自己的 SelfIdentity，过时信息一律拒接``() =
+        Report.title output "通用参数表：四家 Host 各用自己的 SelfIdentity，过时信息一律拒接"
 
         let captured = Report.unixMs DateTime.Now
-        let oldInfo = AppInfo.create (AppKind.Word, 999999, "!WordVSTO.Instance.999999", 0n, "", captured)
-        let newInfo = GeneralBridge.ofAppInfo oldInfo
+        let images = [ "WINWORD"; "EXCEL"; "POWERPNT"; "acad" ]
+        let before = images |> List.map(fun image -> image, Report.procIds image)
 
-        Report.line output "旧参数表" (oldInfo.describe())
-        Report.line output "新参数表" (newInfo.describe())
-        Should.equal "WINWORD" newInfo.Identity.Image
+        let entries: (string * GeneralIdentity * (GeneralAppInfo -> Result<obj, string>)) list =
+            [ "Word", WordHost.Host.SelfIdentity,
+              (fun i -> WordHost.Host.GetApplication i |> Result.map(fun app -> box app))
+              "Excel", ExcelHost.Host.SelfIdentity,
+              (fun i -> ExcelHost.Host.GetApplication i |> Result.map(fun app -> box app))
+              "PPT", PowerPointHost.Host.SelfIdentity,
+              (fun i -> PowerPointHost.Host.GetApplication i |> Result.map(fun app -> box app))
+              "CAD", AutoCADHost.Host.SelfIdentity,
+              (fun i -> AutoCADHost.Host.GetApplication i |> Result.map(fun app -> box app)) ]
 
-        let oldVerify = AppInfo.verify oldInfo
-        let newVerify = GeneralAppInfo.verify newInfo
-        Report.line output "旧现场校验" (sprintf "%A" oldVerify)
-        Report.line output "新现场校验" (sprintf "%A" newVerify)
-        Should.equal oldVerify newVerify
+        for label, identity, call in entries do
+            let info =
+                GeneralAppInfo.create
+                    (identity, 999999, sprintf "!%s.Instance.999999" identity.Tag, 0n, "", captured)
 
-        // 文档级交接检查按用户要求推迟：字段照收、照抄，但不参与任何判断
+            Report.line output label (info.describe())
+
+            let result = call info
+            let text =
+                match result with
+                | Error message -> message
+                | Ok _ -> "Ok（不该发生）"
+
+            Report.line2 output "拒接" label text
+            Should.equal true (
+                match result with
+                | Error message -> message.Contains identity.Image && message.Contains "绝不另起一个"
+                | _ -> false
+            )
+
+        // 文档级交接检查按用户要求推迟：字段照收，但不参与任何判断
         let withDoc =
-            { oldInfo with
-                DocName = Some "文档1"
-                DocPath = Some @"C:\tmp\文档1.docx" }
+            { (GeneralAppInfo.create (WordHost.Host.SelfIdentity, 1, "", 0n, "", captured))
+              with
+                  DocName = Some "文档1"
+                  DocPath = Some @"C:\tmp\文档1.docx" }
 
-        let genDoc = GeneralBridge.ofAppInfo withDoc
+        Report.line output "文档字段" (sprintf "名字=%A 路径=%A" withDoc.DocName withDoc.DocPath)
+        Should.equal (Some "文档1") withDoc.DocName
+        Should.equal (Some @"C:\tmp\文档1.docx") withDoc.DocPath
 
-        Report.line
-            output
-            "文档字段"
-            (sprintf "旧 %A / %A，新 %A / %A" withDoc.DocName withDoc.DocPath genDoc.DocName genDoc.DocPath)
+        for image, ids in before do
+            let now = Report.procIds image
+            Report.line2 output "进程" image (sprintf "%A → %A" (Set.toList ids) (Set.toList now))
+            Should.equal ids now
 
-        Should.equal withDoc.DocName genDoc.DocName
-        Should.equal withDoc.DocPath genDoc.DocPath
-
-        Report.conclusion output "通过：同一条信息两张表，现场校验一致；文档字段只收数据，交接检查按用户要求推迟"
+        Report.conclusion output "通过：四家身份常量都来自专用 Host，过时信息四家入口都拒接、进程名各归各家；文档字段只收数据"

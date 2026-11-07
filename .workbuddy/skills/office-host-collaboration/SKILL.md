@@ -233,9 +233,9 @@ XUNITHOST_CONVERT_DIR='C:\某个目录' XUNITHOST_CONVERT_BATCH=5 "$exe" ...
 | COM 细节 + 转换 | `WordHost` / `ExcelHost` / `PowerPointHost` / `AutoCADHost` | 与 Office 强相关的操作放对应库（六条转换也挂在各自 host 库末尾）；各自会 `identity` 报自己是谁（`PowerPointHost` 只做方式一，没有会话层） |
 | ppt 升级函数 | `PowerPointHost/PptIO.fs` + `PptUpgrade.fs`；验证 `xUnitHost/PptUpgradeTest.fs`（`-m "*pptUpgrade*"`） | `pptUpgrade app <路径>`：`PptIO.detectMacro` 判宏 → 纯规则 `route` → `PptToPptx`(24) / `PptToPptm`(25)；转完读回幻灯片文字指纹、已有同名先转临时文件、判不出宏失败且原件保留。PowerPoint 的 Open/SaveAs 是**强类型按值**参数；`WithWindow=msoFalse` 不弹窗口；`Application.Visible` 不许设 msoFalse |
 | 批量转格式 | `xUnitHost/ConvertCore.fs` + `Convert.fs`（**前部**）；`WordHost/DocIO.fs` + `DocUpgrade.fs`、`ExcelHost/BookIO.fs` + `XlsUpgrade.fs`（两个 host 库**末尾**） | 两侧对称：各一份文件放三个入口 —— 两条转换各自独立（格式码/后缀/核对/文案各归其主）+ 一个统一入口判宏 → 纯规则 `route` 选路；共用 COM 细节在各自的 `*IO.fs`；host 只回传 `(目标, 状态, 详情)`，`Convert.fs` 组装 Outcome、只留 `Paths.scan` / `Convert.all` / `readWordText` / `readBookPrint` / `canDelete`；真目录入口是两条按环境变量跑的 Fact（`ConvertTest.fs` 末段） |
-| 黑板展示文本参考解析 | `xUnitHost/BlackboardText.fs`（测试项目前部） | `module internal BlackboardText`：`caption` / `ofText` 把插件文本填成 `AppInfo` 参数表，只供调用方参考；**`OsHost` 不认文本，只认结构化参数表** |
-| 通用参数表（另一条路） | `OsHost/GeneralAppInfo.fs` + `xUnitHost/GeneralAppInfoTest.fs` | 与 `AppKind` 解耦：`GeneralIdentity` 三个参数占位、`attachWith` 的 `acquire` / `work` 获取函数占位；`-method "*通用参数表*"`；12:01 落地时原 `AppInfo.fs` 未动，13:51 两路一起撤了文档级交接检查 |
-| Excel 的通用入口 | `ExcelHost/Host.fs` 的 `Host.General`（旧 `GetApplication` 正下方）+ `xUnitHost/ExcelGeneralTest.fs` | `Host.General.GetApplication(info: GeneralAppInfo)`：`Tag="excel"` 公开常量、`GeneralAppInfo.attach` + 强转 Excel.Application + pid 核对；旧入口与其余三家未动；`-method "*Excel 通用参数表*"` 两条 Fact，ROT 探针走完整链路、不启真机 Excel |
+| 黑板展示文本参考解析 | `xUnitHost/BlackboardText.fs`（测试项目前部） | `module internal BlackboardText`：`caption` / `ofText` 把插件文本填成 `GeneralAppInfo`，身份取各家 Host 的 `SelfIdentity`，只供参考；**`OsHost` 不认文本，只认结构化参数表** |
+| 通用参数表 + 四家入口 | `OsHost/GeneralAppInfo.fs` + 四家 `Host.fs` 的 `SelfIdentity` / `GetApplication` | `GeneralIdentity` 三个参数占位、`attachWith` 的 `acquire` / `work` 获取函数占位；四家 `Host.GetApplication(info: GeneralAppInfo)` 形状对称。14:11 删掉 `AppInfo.fs` 与 Excel 的 `Host.General` 子模块，只此一条路 |
+| 通用参数表验证 | `xUnitHost/GeneralAppInfoTest.fs` + `ExcelGeneralTest.fs` | `-method "*通用参数表*"` 五条（含 Excel 入口两条），只跑 Excel 用 `-method "*Excel 通用参数表*"`；ROT 探针走完整链路、不启真机 Excel |
 | 跨进程 | `xUnitHost/SecondProcessTest.fs` | 第二个进程 = 测试程序自己；地址 / 要说的话 / 回话文件都从环境变量来 |
 
 **项目的增减由用户定**：往现有项目里**加文件随时可以**（新 Fact、新公用模块都行）；但
@@ -288,26 +288,29 @@ bash .workbuddy/skills/office-host-collaboration/scripts/run-facts.sh -a -n   # 
 
 插件把「当前实例」抄到黑板上（采集时间 / PID / ROT 名 / HWND / EXE / 文档 / 路径），
 WorkBuddy 只读写、**不负责黑板的创建与销毁**。四家 host 各有一个
-`GetApplication(info) : Result<Application,string>`：按 ROT 名字精确附着 + 现场校验，
-绝不新建、绝不 Quit、不改应用状态；信息过时 / 种类错配 / 认错进程就 `Error`。
-**文档级交接检查（换了文档 / 文档关了 / 采集后存过盘）按用户要求推迟**（2026-11-07 13:51）：两路库与四家入口都不做，
+`GetApplication(info: GeneralAppInfo) : Result<Application,string>`：按 ROT 名字精确附着 + 现场校验，
+绝不新建、绝不 Quit、不改应用状态；信息过时 / Tag 错配 / 认错进程就 `Error`。
+**文档级交接检查（换了文档 / 文档关了 / 采集后存过盘）按用户要求推迟**（2026-11-07 13:51）：
 `DocName` / `DocPath` 字段保留、只是收下的数据，以后再接回来（旧实现在 git 历史 `6be1725` 之前）。
-**`AppInfo` 是结构化参数表，调用方按字段填报**（直接构造记录，或用类型上的静态构造成员 `AppInfo.create(...)` 起最小集再 `with` 补齐），`OsHost` 里没有文本解析（`ofText` 已移出生产库）；
+
+**只有一张参数表 `GeneralAppInfo`**（`OsHost/GeneralAppInfo.fs`）：调用方按字段填报，
+或用 `GeneralAppInfo.create (identity, pid, rot, hwnd, exePath, capturedMs)` 起最小集再 `with` 补齐。
+身份 `GeneralIdentity` 的 `Image` / `Name` / `Tag` 三个值由**各家专用 Host** 提供：
+`WordHost.Host.SelfIdentity = ("WINWORD","Word","word")`、
+`ExcelHost.Host.SelfIdentity = ("EXCEL","Excel","excel")`，
+`PowerPointHost.Host.SelfIdentity = ("POWERPNT","PowerPoint","ppt")`、
+`AutoCADHost.Host.SelfIdentity = ("acad","AutoCAD","acad")` —— 14:11 从删掉的 `AppKind` 四个分支搬过来的。
+库只比字符串、不解释 Tag，第五家不用改库；`OsHost` 里没有文本解析。
 把插件展示文本填成参数表的参考写法是测试项目 `xUnitHost/BlackboardText.fs`
 （`BlackboardText.ofText`，只供参考、不是库 API），插件改排版只改这一份。
-共用件在 `OsHost/AppInfo.fs` + `OsHost.Com.runningAt`，完整 API 见 `references/api.md`。
-验证 `xUnitHost/BlackboardTest.fs` 四条 Fact（`-method "*黑板*"`），真机那条靠 `XUNITHOST_BLACKBOARD_FILE`。
+共用件在 `OsHost/GeneralAppInfo.fs` + `OsHost.Com.runningAt`，完整 API 见 `references/api.md`。
+验证 `-method "*黑板*"` 四条、`-method "*通用参数表*"` 五条（真机那条靠 `XUNITHOST_BLACKBOARD_FILE`）。
 返回的 Application 与后续读写都放在 `OsHost.Sta.run` 那条固定 STA 线程上。
 
-**另一条路（2026-11-07 12:01，用户要求「原文件不动，另起炉灶」）**：`OsHost/GeneralAppInfo.fs` 的
-`GeneralAppInfo` 与 `AppKind` 完全解耦 —— 进程名 / 显示名 / 种类标记由 `GeneralIdentity` 三个**参数**占位，
-「怎么取对象」「拿到 obj 之后怎么转强类型」由 `attachWith` 的 `acquire` / `work` 两个**获取函数**占位。
-现场校验口径与 `AppInfo` 一致，两条路并存；**14:05 起 Excel 另有 `ExcelHost.Host.General.GetApplication(info: GeneralAppInfo)`**
-（嵌套模块保留函数名，Tag 公开为 `Host.General.Tag`），其余三家 host 仍在旧路上。
-验证 `-method "*通用参数表*"`（现五条：`GeneralAppInfoTest.fs` 三条 + `ExcelGeneralTest.fs` 两条），
-只跑 Excel 入口用 `-method "*Excel 通用参数表*"`；完整 API 见 `references/api.md`。
-生产层不知道 `AppKind` 存在，桥接示例只在测试项目。
-13:51 起两路都不做文档级交接检查（见上），`DocName` / `DocPath` 只是收下的数据。
+**14:11 收束**：用户把 `AppKind` / `AppInfo` 标为 `[<Obsolete>]` 后决定整份删除，
+范围选「原来的 GetApplication 被 GeneralAppInfo 参数的替代」：`OsHost/AppInfo.fs` 删掉，
+四家 `GetApplication` 统一改收 `GeneralAppInfo`，14:05 为并存而加的 `ExcelHost.Host.General` 子模块一并撤掉；
+测试项目 `GeneralBridge` 与「对照旧表」的 Fact 删除，等价验证改写保留。旧路快照在 `19d7d0c`。
 
 ## 汇报格式
 

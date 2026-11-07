@@ -1,10 +1,11 @@
-﻿/// 【参考实现，不是库的 API】把插件复制到剪贴板的「黑板展示文本」读成结构化参数表 AppInfo。
+﻿/// 【参考实现，不是库的 API】把插件复制到剪贴板的「黑板展示文本」读成结构化参数表 GeneralAppInfo。
 ///
-/// 生产库 OsHost 只认 AppInfo 那张参数表：调用方（插件 / 宿主程序）按字段填报，
+/// 生产库 OsHost 只认 GeneralAppInfo 那张参数表：调用方（插件 / 宿主程序）按字段填报，
 /// 库不认文本、不解析排版。插件改了标题、键名、措辞，只改这一份参考代码，不动库。
-/// 用不上文本源的程序请直接填参数表：
-///   { (AppInfo.create (AppKind.Word, 27232, "!WordVSTO.Instance.27232", 0n, "", captured))
-///       with DocName = Some "文档1" }
+/// 用不上文本源的程序请直接填参数表，身份取各家专用 Host 的 SelfIdentity：
+///   { (GeneralAppInfo.create
+///        (WordHost.Host.SelfIdentity, 27232, "!WordVSTO.Instance.27232", 0n, "", captured))
+///     with DocName = Some "文档1" }
 /// 解析出来的字段与手工填报的字段完全相同，四家 GetApplication(info) 分不出来源。
 namespace XUnitHost
 
@@ -76,24 +77,26 @@ module internal BlackboardText =
             | true, moment -> Some(Clock.unixMs moment)
             | _ -> None
 
-    let private kindOfLine (lines: string array) : AppKind option =
+    /// 认出是哪一家 → 直接取那家专用 Host 上的身份参数（不再有封闭枚举）。
+    let private identityOfLine (lines: string array) : GeneralIdentity option =
         match valueOf "KIND" lines with
-        | Some value when contains "word" value -> Some AppKind.Word
-        | Some value when contains "excel" value -> Some AppKind.Excel
-        | Some value when contains "ppt" value || contains "powerpoint" value -> Some AppKind.PowerPoint
-        | Some value when contains "acad" value -> Some AppKind.AutoCAD
+        | Some value when contains "word" value -> Some WordHost.Host.SelfIdentity
+        | Some value when contains "excel" value -> Some ExcelHost.Host.SelfIdentity
+        | Some value when contains "ppt" value || contains "powerpoint" value ->
+            Some PowerPointHost.Host.SelfIdentity
+        | Some value when contains "acad" value -> Some AutoCADHost.Host.SelfIdentity
         | _ -> None
 
     /// 从插件的标题 / ROT 名 / EXE 路径认是哪一家
-    let private kindOfText (text: string) : AppKind option =
+    let private identityOfText (text: string) : GeneralIdentity option =
         if contains "WordVSTO" text || contains "WINWORD.EXE" text then
-            Some AppKind.Word
+            Some WordHost.Host.SelfIdentity
         elif contains "ExcelVSTO" text || contains "EXCEL.EXE" text then
-            Some AppKind.Excel
+            Some ExcelHost.Host.SelfIdentity
         elif contains "PowerPointVSTO" text || contains "PPTVSTO" text || contains "POWERPNT" text then
-            Some AppKind.PowerPoint
+            Some PowerPointHost.Host.SelfIdentity
         elif contains "AcadVSTO" text || contains "AutoCAD" text || contains "ACAD.EXE" text then
-            Some AppKind.AutoCAD
+            Some AutoCADHost.Host.SelfIdentity
         else
             None
 
@@ -120,11 +123,11 @@ module internal BlackboardText =
         |> Array.tryFind(fun line -> line.StartsWith "[")
         |> Option.defaultValue "(没有标题行)"
 
-    /// 参考解析：插件剪贴板原文 / 会话里贴的一段 / 存下来的 txt → AppInfo 参数表。
+    /// 参考解析：插件剪贴板原文 / 会话里贴的一段 / 存下来的 txt → GeneralAppInfo 参数表。
     /// 缺 PID / 采集时间 / 认不出种类，一律 Error —— 信息不完整就不该往下走。
-    /// 注意这里只是「把展示文本填成参数表」，真正的现场校验在 OsHost.AppInfo.verify；
+    /// 注意这里只是「把展示文本填成参数表」，真正的现场校验在 OsHost.GeneralAppInfo.verify；
     /// 文档级交接检查按用户要求推迟（2026-11-07 13:51），暂不做。
-    let ofText (text: string) : Result<AppInfo, string> =
+    let ofText (text: string) : Result<GeneralAppInfo, string> =
         if String.IsNullOrWhiteSpace text then
             Error "黑板信息是空的"
         else
@@ -133,10 +136,10 @@ module internal BlackboardText =
                 |> Array.map(fun line -> line.Trim())
                 |> Array.filter(fun line -> not (String.IsNullOrWhiteSpace line))
 
-            let kind =
-                match kindOfLine lines with
+            let identity =
+                match identityOfLine lines with
                 | Some value -> Some value
-                | None -> kindOfText text
+                | None -> identityOfText text
 
             let pid =
                 match valueOf "PID" lines with
@@ -148,7 +151,7 @@ module internal BlackboardText =
 
             let capturedMs = parseClock text |> Option.defaultValue 0L
 
-            if kind.IsNone then
+            if identity.IsNone then
                 Error "认不出是哪一家 COM：黑板信息里既没有插件名，也没有 KIND 行"
             elif pid <= 0 then
                 Error "黑板信息里没有有效 PID：不猜、不新建"
@@ -156,11 +159,13 @@ module internal BlackboardText =
                 Error "黑板信息里没有有效采集时间：无法判断信息是否过时"
             else
                 Ok
-                    { Kind = kind.Value
-                      Pid = pid
-                      Rot = valueOf "ROT" lines |> Option.defaultValue ""
-                      Hwnd = valueOf "HWND" lines |> Option.map parseHwnd |> Option.defaultValue 0n
-                      ExePath = exeLine lines
-                      CapturedMs = capturedMs
-                      DocName = docName lines
-                      DocPath = docPath lines }
+                    { (GeneralAppInfo.create
+                        (identity.Value,
+                         pid,
+                         valueOf "ROT" lines |> Option.defaultValue "",
+                         valueOf "HWND" lines |> Option.map parseHwnd |> Option.defaultValue 0n,
+                         exeLine lines,
+                         capturedMs))
+                      with
+                          DocName = docName lines
+                          DocPath = docPath lines }

@@ -111,6 +111,7 @@
   `-method "*第二个进程*"` 只跑那一条。子进程的回话**写文件**（`XUNITHOST_SAY_AT`），
   别去挑 stdout —— 那里面混着跑框架的输出。读 stdout 和 stderr 要一路并行抽，
   两头都读才不会把管道写满僵住。
-- **黑板展示文本不进生产库**：`AppInfo` 是调用方按字段填的结构化参数表，`OsHost` 里没有 `ofText`、
-  也没有展示用的 `Title`。把「`KEY : value` 的排版」写进库，等于把插件的显示格式变成隐含契约，
-  插件一改文案库就跟着改。参考解析只在测试项目 `xUnitHost/BlackboardText.fs`，格式紧耦合就锁在那儿。
+- **黑板展示文本不进生产库**：`GeneralAppInfo` 是调用方按字段填的结构化参数表，
+  身份 `GeneralIdentity` 取各家 Host 的 `SelfIdentity`；`OsHost` 里没有 `ofText`、也没有展示用的标题字段。
+  把「`KEY : value` 的排版」写进库，等于把插件的显示格式变成隐含契约，插件一改文案库就跟着改。
+  参考解析只在测试项目 `xUnitHost/BlackboardText.fs`（产出 `GeneralAppInfo`），格式紧耦合就锁在那儿。

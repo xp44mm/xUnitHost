@@ -1,4 +1,5 @@
-﻿/// ExcelHost.Host.General.GetApplication(info: GeneralAppInfo) 的验证：与 AppKind 解耦的那条路。
+﻿/// ExcelHost.Host.GetApplication(info: GeneralAppInfo) 的验证：旧路收束后唯一的 Excel 黑板入口。
+/// 身份常量 ExcelHost.Host.SelfIdentity 就在专用 Host 上；14:11 之前并存的 Host.General 子模块已撤掉。
 /// 全部只读本机进程与 ROT，绝不新建 / 关闭 Word / Excel / PowerPoint / AutoCAD。
 namespace XUnitHost
 
@@ -22,7 +23,7 @@ type ExcelGeneralTest(output: ITestOutputHelper) =
 
         let stale =
             GeneralAppInfo.create (
-                GeneralIdentity.create ("EXCEL", "Excel", ExcelHost.Host.General.Tag),
+                GeneralIdentity.create ("EXCEL", "Excel", ExcelHost.Host.SelfIdentity.Tag),
                 999999,
                 rot,
                 0n,
@@ -30,18 +31,18 @@ type ExcelGeneralTest(output: ITestOutputHelper) =
                 captured
             )
 
-        Report.line output "入口标记" ExcelHost.Host.General.Tag
+        Report.line output "入口标记" ExcelHost.Host.SelfIdentity.Tag
         Report.line output "错标记表" (wrongTag.describe())
         Report.line output "过时参数表" (stale.describe())
 
         let images = [ "WINWORD"; "EXCEL"; "POWERPNT"; "acad" ]
         let before = images |> List.map(fun image -> image, Report.procIds image)
 
-        let wrong = ExcelHost.Host.General.GetApplication wrongTag
+        let wrong = ExcelHost.Host.GetApplication wrongTag
         Report.line output "错标记" (sprintf "%A" wrong)
         Should.equal true (match wrong with Error message -> message.Contains "不接" | _ -> false)
 
-        let old = ExcelHost.Host.General.GetApplication stale
+        let old = ExcelHost.Host.GetApplication stale
         Report.line output "过时" (sprintf "%A" old)
         Should.equal true (match old with Error message -> message.Contains "绝不另起一个" | _ -> false)
 
@@ -59,7 +60,7 @@ type ExcelGeneralTest(output: ITestOutputHelper) =
         let selfImage = Path.GetFileNameWithoutExtension Environment.ProcessPath
         let rot = sprintf "!General.%d" Environment.ProcessId
         let captured = Report.unixMs DateTime.Now
-        let identity = GeneralIdentity.create (selfImage, "测试进程", ExcelHost.Host.General.Tag)
+        let identity = GeneralIdentity.create (selfImage, "测试进程", ExcelHost.Host.SelfIdentity.Tag)
         let info = GeneralAppInfo.create (identity, Environment.ProcessId, rot, 0n, "", captured)
         let probe = BlackboardProbe()
 
@@ -79,7 +80,7 @@ type ExcelGeneralTest(output: ITestOutputHelper) =
             Assert.Skip("本机不允许在此进程登记 ROT：" + message)
         | Ok cookie ->
             try
-                let hit = ExcelHost.Host.General.GetApplication info
+                let hit = ExcelHost.Host.GetApplication info
                 let hitText =
                     match hit with
                     | Error message -> "Error " + message
@@ -91,14 +92,14 @@ type ExcelGeneralTest(output: ITestOutputHelper) =
                 Should.equal false (match hit with Error message -> message.Contains "绝不新建" | _ -> true)
 
                 let missing = { info with Rot = "!General.不存在" }
-                let absent = ExcelHost.Host.General.GetApplication missing
+                let absent = ExcelHost.Host.GetApplication missing
                 Report.line output "名字不在" (sprintf "%A" absent)
                 Should.equal true (match absent with Error message -> message.Contains "绝不新建" | _ -> false)
 
                 let mismatch =
                     { info with Identity = GeneralIdentity.create (selfImage, "测试进程", "word") }
 
-                let refused = ExcelHost.Host.General.GetApplication mismatch
+                let refused = ExcelHost.Host.GetApplication mismatch
                 Report.line output "标记错配" (sprintf "%A" refused)
                 Should.equal true (match refused with Error message -> message.Contains "不接" | _ -> false)
             finally

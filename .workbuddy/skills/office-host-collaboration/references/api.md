@@ -366,74 +366,62 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -noColor -showLiveOutput
 场景：WordVSTO / ExcelVSTO 插件把当前实例抄到黑板上（`[…] 采集时间 …` / PID / ROT / HWND / EXE / 文档 / 路径），
 消费方只按 info 精确挂回那一只实例读写；**黑板的创建与销毁不归它管**，不并行，交接时数据要完整、不过时、没被别的任务改过。
 
-- `OsHost/AppInfo.fs`：`AppKind = Word | Excel | PowerPoint | AutoCAD`；**`AppInfo` 是调用方要填的结构化参数表**：
-  `Kind/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath`，全是结构化字段，没有一行展示文本。
-  直接构造记录，或用类型上的**静态构造成员** `AppInfo.create (kind, pid, rot, hwnd, exePath, capturedMs)`
-  起最小必填集再 `with` 补 `DocName` / `DocPath`（2026-11-07 11:37 取代原模块函数 `ofParts`）。
-  **成员函数**（2026-11-07 11:44）：`AppKind` 上 `kind.image()` = 进程名、`kind.kindName()` = 给人看的名字；
-  `AppInfo` 上 `info.describe()` = 一行摘要。同名 `module AppInfo` 里只剩
-  `verify` / `ensureKind` / `attach`（+ 私有 `firstError`），它们内部改调这些成员。
-  **库不解析文本**：`ofText` 与展示用的 `Title` 已从 `OsHost` 移除 —— 插件改标题、键名、措辞只该改调用方。
-  采集时间由填报方给 Unix 毫秒，库不替你猜。
-  `verify` 核「进程还在 / 启动时间不晚于采集 / HWND 仍属该 pid / EXE 一致 / ROT 名后缀 pid 一致」；
-  `ensureKind`；`attach` = 种类 → 现场校验 → 按名取对象 → 交 work。
-  **文档级交接检查推迟**（2026-11-07 13:51 用户定）：「换了文档 / 文档关了 / 采集后存过盘」这一层两路都不做，
-  `checkDoc` 已从 `AppInfo.fs` 与 `GeneralAppInfo.fs` 撤掉；`DocName` / `DocPath` 字段保留，数据照收、暂不参与判断。
-  旧实现可从 git 历史（`6be1725` 及之前）找回。
-- `OsHost.Com` 新增：`runningAt : string -> obj option`（`CreateItemMoniker("!", 名)` + `IRunningObjectTable.GetObject`，
+- `OsHost/GeneralAppInfo.fs`（**现在只此一条路**）：`GeneralIdentity` 三个**参数**占位
+  `Image`（进程名）/ `Name`（显示名）/ `Tag`（调用方自己的种类标记），`GeneralIdentity.create (image, name, tag)`；
+  `GeneralAppInfo` 是调用方要填的结构化参数表
+  `Identity/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath`，
+  `GeneralAppInfo.create (identity, pid, rot, hwnd, exePath, capturedMs)` 起最小必填集再 `with` 补文档字段，
+  `info.describe()` 一行摘要。库只比字符串、不解释 Tag，第五家不用改库。
+  采集时间由填报方给 Unix 毫秒，库不替你猜；**库不解析文本**（展示文本解析从不进 `OsHost`）。
+  `module GeneralAppInfo`：`verify`（核「进程还在 / 启动时间不晚于采集 / HWND 仍属该 pid / EXE 一致 /
+  ROT 名后缀 pid 一致」，另多一条「Image 为空」）、`ensureTag`（比 Tag）、
+  `defaultAcquire`（ROT 名优先，空则按 ProgID 列表）、
+  **`attachWith info tag acquire work`**（`acquire` / `work` 两个获取函数占位）/
+  `attach`（套默认 `defaultAcquire` 的便捷版）。
+  `attach` = 标记 → 现场校验 → 按名取对象 → 交 `work`；全程 `Sta.run` 固定 STA 线程。
+  **文档级交接检查推迟**（2026-11-07 13:51 用户定）：`DocName` / `DocPath` 只收数据、不参与判断，
+  旧 `checkDoc` 可从 git 历史（`6be1725` 及之前）找回。
+- `OsHost.Com`：`runningAt : string -> obj option`（`CreateItemMoniker("!", 名)` + `IRunningObjectTable.GetObject`，
   **不枚举 ROT、不退回 GetActiveObject、绝不新建**）、`register` / `revoke`（自测登记本地对象用）、
   `OsHost.Proc.exePath : int -> string option`。
-- 四家入口形状对称：`WordHost.Host.GetApplication : AppInfo -> Result<Application,string>`；
-  `ExcelHost.Host.GetApplication` / `PowerPointHost.Host.GetApplication` /
-  `AutoCADHost.Host.GetApplication : AppInfo -> Result<AcadApplication,string>`。
-  种类不符 / 信息过时 / ROT 里没这个名字 / pid 对不上，一律 `Error`；pid 对上就直接交回 Application
+- 四家入口形状对称：`WordHost.Host.GetApplication` / `ExcelHost.Host.GetApplication` /
+  `PowerPointHost.Host.GetApplication` : `GeneralAppInfo -> Result<Application,string>`，
+  `AutoCADHost.Host.GetApplication : GeneralAppInfo -> Result<AcadApplication,string>`。
+  内部都是 `GeneralAppInfo.attach info SelfIdentity.Tag progIds work`，
+  `work` 做 `raw :?> 自家 Application` + `pidOf` 核对 + `Errors.explain`。
+  Tag 不符 / 信息过时 / ROT 里没这个名字 / pid 对不上，一律 `Error`；pid 对上就直接交回 Application
   （13:51 起不再核当前文档，见上面的推迟说明）。
   绝不新建、绝不 Quit、不改 `DisplayAlerts`。`PowerPointHost.Host.pidOf` 用 `app.HWND`。
+- **身份常量在专用 Host**（14:11 从删掉的 `AppKind.image()` / `kindName()` 四个分支搬过来）：
+  `WordHost.Host.SelfIdentity = ("WINWORD", "Word", "word")`、
+  `ExcelHost.Host.SelfIdentity = ("EXCEL", "Excel", "excel")`、
+  `PowerPointHost.Host.SelfIdentity = ("POWERPNT", "PowerPoint", "ppt")`、
+  `AutoCADHost.Host.SelfIdentity = ("acad", "AutoCAD", "acad")`。
+  调用方填 `GeneralIdentity` 直接取用，库里没有封闭种类枚举。
 - **公寓**：`attach` 走 `Sta.run` 固定长活 STA 线程；后续对 Application 的读写也包 `Sta.run`。
-  一步做完就直接 `AppInfo.attach info kind progIds work`，别让 RCW 跑出临时 STA 线程。
+  一步做完可直接 `GeneralAppInfo.attach info tag progIds work`，别让 RCW 跑出临时 STA 线程。
 - **参考解析（不是库 API）**：`xUnitHost/BlackboardText.fs`，`module internal BlackboardText`：
-  `caption`（只贴标题行给人看）/ `ofText : string -> Result<AppInfo,string>` —— 把插件复制的展示文本
-  填成同一张参数表。格式强耦合的代码只留在这份里；用不上文本源的程序直接按字段填 `AppInfo`。
-- 验证：`xUnitHost/BlackboardTest.fs` 四条 Fact（`-method "*黑板*"`）；第一条同时验
+  `caption` / `ofText : string -> Result<GeneralAppInfo,string>`；认出哪家就从那家 Host 取 `SelfIdentity`。
+  格式强耦合的代码只留在这份里；用不上文本源的程序直接按字段填 `GeneralAppInfo`。
+- 验证：`-method "*黑板*"` 四条（`xUnitHost/BlackboardTest.fs`）、
+  `-method "*通用参数表*"` 五条（`GeneralAppInfoTest.fs` 三条 + `ExcelGeneralTest.fs` 两条）、
+  只跑 Excel 入口 `-method "*Excel 通用参数表*"`。黑板第一条验
   「手工填报的参数表 == 参考解析出来的那条」；真机那条设
-  `XUNITHOST_BLACKBOARD_FILE=<剪贴板文本存的文件>`，不设就 Skip。原「文档级校验」那条 Fact 已随推迟决定撤掉。
+  `XUNITHOST_BLACKBOARD_FILE=<剪贴板文本存的文件>`，不设就 Skip。
 
-### 另一条路：GeneralAppInfo（2026-11-07 12:01，用户要求「原文件不动，另起炉灶」）
+### 14:11 收束记录（旧路已删）
 
-12:01 落地时 `OsHost/AppInfo.fs`、四家 `GetApplication(info)` 确未动（提交 `6be1725`）；
-13:51 用户要求「文档级交接检查推迟」，两路库与四家入口才一起改，除此之外两条路仍并存。
-新文件 `OsHost/GeneralAppInfo.fs`：
+用户把 `AppKind` / `AppInfo` 标成 `[<Obsolete>]` 后决定整份删除，范围选了
+「原来的 GetApplication 被 GeneralAppInfo 参数的替代」：
 
-- `GeneralIdentity`：**参数占位**，取代 `AppKind` 上那两个 match —— `Image`（进程名）/ `Name`（显示名）/
-  `Tag`（调用方自己的种类标记）；`static member create (image, name, tag)`。库只比字符串、不解释 Tag，
-  四家之外的第五家不用改库。
-- `GeneralAppInfo`：纯参数表 `Identity/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath`，
-  `static member create (identity, pid, rot, hwnd, exePath, capturedMs)` / `info.describe()`。
-- `module GeneralAppInfo`：`verify`（与 `AppInfo.verify` 同口径，另多一条「Image 为空」）、
-  `ensureTag`（比 Tag，不比枚举）、`defaultAcquire`（ROT 名优先，空则按 ProgID 列表）、
-  （文档级 `checkDoc` 已按 13:51 的决定撤掉，字段保留不判断）
-  **`attachWith info tag acquire work`** —— `acquire : GeneralAppInfo -> obj option` 与
-  `work : obj -> Result<'T,string>` 是**获取函数占位**，由调用方注入；`attach` 是套默认 `defaultAcquire` 的便捷版。
-  全程 `Sta.run` 固定 STA 线程；取不到就 `Error`，绝不新建 / Quit / 退回 GetActiveObject。
-- 生产层**不知道 `AppKind` 存在**；`AppInfo → GeneralAppInfo` 的桥接示例 `module internal GeneralBridge`
-  留在测试项目 `xUnitHost/GeneralAppInfoTest.fs`（不是库 API）。
-- 验证：三条 Fact，`-method "*通用参数表*"`。其中「获取函数占位」那条用 `Com.register` 在当前进程登记
-  `BlackboardProbe`，`register / acquire / revoke` 都排在**同一条** `Sta.run` 线程上
-  （避免跨公寓、也避免 `Sta.run` 嵌套），正向挂回 `Ok "XUnitHost.BlackboardProbe"` —— 不需要 Office 的完整附着链。
-  第三条现在只对照 `verify` 与文档字段照抄，不再验「换了文档 / 文档关了 / 存过盘」四种情形。
-
-### Excel 上「用 General 的 GetApplication」（2026-11-07 14:05）
-
-用户指定 `ExcelHost/Host.fs#72`（旧 `GetApplication` 正下方）再写一个走通用参数表的入口。
-**F# 同一模块不能有两个同名 `let GetApplication`**，所以放在嵌套模块里以保留名字：
-
-- `ExcelHost.Host.General.Tag = "excel"`（公开常量，调用方填 `GeneralIdentity.Tag` 就用它，别把标记写成隐式约定）；
-  `ExcelHost.Host.General.GetApplication : GeneralAppInfo -> Result<Excel.Application,string>`。
-- 实现 `GeneralAppInfo.attach info Tag progIds work`：`work` 做 `raw :?> Excel.Application` + `Host.pidOf` 核对
-  + `Errors.explain`（与旧入口同一口径）。不认 `AppKind`、不新建、不 Quit、不改应用状态；
-  文档级检查仍按 13:51 的决定推迟，返回的 Application 与后续读写都在 `Sta.run` 那条 STA 线程上。
-- 旧入口 `ExcelHost.Host.GetApplication(AppInfo)` 与其余三家 host **一行未动**，两条路并存。
-- 验证 `xUnitHost/ExcelGeneralTest.fs` 两条 Fact，只跑它们用 `-method "*Excel 通用参数表*"`；
-  它们也命中 `-method "*通用参数表*"`（现共五条）。一条验错 Tag / 过时信息拒接且四家进程前后一致，
-  另一条用 ROT 探针按名取回现成对象、走完整入口链路（取到对象但不是 Excel.Application → 明确 `Error`；
-  名字不在 / 标记错配拒接）。**不需要起真机 Excel**；本机没有运行的 ExcelVSTO 实例，正向 `Ok app` 未实跑。
+- `OsHost/AppInfo.fs` 删除（`AppKind` + `AppInfo` + `verify` / `ensureKind` / `attach` 全由 `GeneralAppInfo` 覆盖），
+  `OsHost.fsproj` 去掉 Compile 行。Obsolete 标注的快照在 `19d7d0c`，旧实现可从更早的 git 历史找回。
+- `kind` 里有用的 `image()` / `kindName()` 四个分支搬进四家专用 Host 的 `SelfIdentity`（见上）。
+- 四家 `Host.GetApplication` 统一改收 `GeneralAppInfo`；14:05 为并存而加的 `ExcelHost.Host.General` 子模块撤掉，
+  函数升到 `Host` 层，成为唯一入口。
+- 测试项目：`BlackboardText.ofText` 改产出 `GeneralAppInfo`；四条黑板 Fact 与 `ExcelGeneralTest.fs` 改调新入口；
+  `GeneralBridge`（旧表 → 新表桥接）删除，`GeneralAppInfoTest.fs` 第三条重写成「四家 SelfIdentity + 入口拒接」。
+- 现场校验口径、STA 公寓要求、13:51 的文档级检查推迟决定都不变；旧路 Fact 的等价验证都保留。
+  `GeneralAppInfoTest.fs` 的「获取函数占位」那条仍用 `Com.register` 登记 `BlackboardProbe`，
+  `register / acquire / revoke` 排在**同一条** `Sta.run` 线程上，正向挂回 `Ok "XUnitHost.BlackboardProbe"`。
+  本机没有运行中的 VSTO 实例，四家真机正向 `Ok app` 仍未实跑。

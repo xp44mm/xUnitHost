@@ -44,7 +44,13 @@ module Host =
     let TryGetRunningApplication () : Application option =
         Com.running progIds |> Option.map(fun value -> value :?> Application)
 
-    // ---------------- 黑板模式：按 info 挂回现成的那一只 ----------------
+    // ---------------- 黑板模式：按 GeneralAppInfo 挂回现成的那一只 ----------------
+
+    /// 这家 host 自己的身份参数：原来 AppKind.image() / kindName() 里 Excel 那一支搬到专用 Host。
+    /// 调用方填 GeneralAppInfo 的 Identity 就用它（进程名 / 显示名 / 种类标记三件套）。
+    /// 旧路（AppInfo / AppKind）与并存的 Host.General 子模块都已撤掉，这里就是唯一的 GetApplication。
+    let SelfIdentity : GeneralIdentity =
+        GeneralIdentity.create ("EXCEL", "Excel", "excel")
 
     /// 这只 Excel 的进程号（Excel 的 Application 自己有 Hwnd，一问就到）
     let pidOf (app: Application) : int option =
@@ -53,13 +59,14 @@ module Host =
         with _ ->
             None
 
-    /// 按插件抄下来的 info 精确挂回那一只 Excel 实例。
+    /// 按插件抄下来的 GeneralAppInfo 精确挂回那一只 Excel 实例。
     /// 只附着、不新建、不 Quit、不改应用状态 —— 黑板的生命周期不归这儿管。
     /// 返回的 Application 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
+    /// 种类标记不符 / 信息过时 / ROT 里没有这个名字 / 认错进程，一律 Error。
     /// 文档级交接检查（换了工作簿 / 采集后存过盘等）按用户要求推迟，暂不做；
     /// info 里的 DocName / DocPath 只是收下的数据，不参与判断。
-    let GetApplication (info: AppInfo) : Result<Application, string> =
-        AppInfo.attach info AppKind.Excel progIds (fun raw ->
+    let GetApplication (info: GeneralAppInfo) : Result<Application, string> =
+        GeneralAppInfo.attach info SelfIdentity.Tag progIds (fun raw ->
             try
                 let app = raw :?> Application
 
@@ -69,31 +76,6 @@ module Host =
                 | _ -> Ok app
             with ex ->
                 Error(Errors.explain ex))
-
-    // ---------------- 黑板模式：通用参数表那条路 ----------------
-
-    /// 另一条路：按 GeneralAppInfo 挂回现成的那一只 Excel 实例，**不认 AppKind**。
-    /// 与上面的 GetApplication 并存 —— F# 同一模块不能有两个同名 let，所以放在 Host.General 里，
-    /// 调用方写 ExcelHost.Host.General.GetApplication info。
-    /// 种类靠调用方填的 Tag（就是这里公开的 Tag）与 Identity 的 Image / Name，库只比字符串；
-    /// 取现成对象走 GeneralAppInfo.attach（ROT 名优先，空则按 ProgID），强类型转换与 pid 核对由 work 注入。
-    /// 只附着、不新建、不 Quit、不改应用状态；文档级交接检查按用户要求推迟，DocName / DocPath 只是收下的数据。
-    /// 返回的 Application 与后续读写都放在 OsHost.Sta.run 那条固定 STA 线程上。
-    module General =
-        /// 调用方填 GeneralIdentity 的 Tag 时用这个值，别把种类标记写成隐式约定。
-        let Tag = "excel"
-
-        let GetApplication (info: GeneralAppInfo) : Result<Application, string> =
-            GeneralAppInfo.attach info Tag progIds (fun raw ->
-                try
-                    let app = raw :?> Application
-
-                    match pidOf app with
-                    | Some number when number <> info.Pid ->
-                        Error(sprintf "ROT 名字指向的是 PID %d，不是黑板上的 %d" number info.Pid)
-                    | _ -> Ok app
-                with ex ->
-                    Error(Errors.explain ex))
 
     // ---------------- 认自己是谁 ----------------
     // 地址里的指纹就是从这儿来的：哪个进程、锚定哪本工作簿、那本工作簿最后什么时候存的。

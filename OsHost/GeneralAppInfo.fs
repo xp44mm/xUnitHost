@@ -1,20 +1,20 @@
-﻿/// 黑板模式的另一条路：一张与 AppKind 完全解耦的通用参数表 GeneralAppInfo。
+﻿/// 黑板模式：一张与种类完全解耦的通用参数表 GeneralAppInfo（现在只此一条路）。
 ///
-/// 原 AppInfo 把「种类」钉在封闭的 AppKind 上（Word / Excel / PowerPoint / AutoCAD 四选一），
-/// 由枚举派生进程名与显示名。这一份把那两块拿出来交给调用方：
-///   · GeneralIdentity 用**参数**占位：Image（进程名）/ Name（显示名）/ Tag（调用方自己的种类标记）；
+/// 旧路 `AppInfo` 把「种类」钉在封闭枚举 `AppKind` 上，由枚举派生进程名与显示名；
+/// 2026-11-07 14:11 按用户决定把 `OsHost/AppInfo.fs` 整份删除，四家各自的进程名 / 显示名 / 标记
+/// 搬进专用 Host 的 `Host.SelfIdentity`，四家 `GetApplication` 统一改收 `GeneralAppInfo`。
+/// 这一份把身份交给调用方用**参数**填：
+///   · GeneralIdentity：Image（进程名）/ Name（显示名）/ Tag（调用方自己的种类标记）；
 ///   · 「怎么拿到现成对象」「拿到 obj 之后怎么转强类型、核身份」用**获取函数**占位：
 ///     attachWith 的 acquire / work 两个参数，库一行 Office 类型都不认，也绝不新建实例。
-/// 于是第五家、第十家不用改库；四家 host 要不要搬过来，由调用方自己决定。
-/// 校验口径（进程 / 启动时间 / HWND / EXE / ROT 后缀）与 AppInfo 一致；文档级交接检查两路都推迟。
-///
-/// 原文件 OsHost/AppInfo.fs 与四家 host 的 GetApplication(info) 一行未动，两条路并存。
+/// 于是第五家、第十家不用改库。
+/// 现场校验口径（进程 / 启动时间 / HWND / EXE / ROT 后缀）不变；文档级交接检查按用户要求推迟。
 namespace OsHost
 
 open System
 open System.Globalization
 
-/// 身份参数：取代 AppKind 上那两个 match。库只做字符串比较，不解释 Tag 的含义。
+/// 身份参数：三个值都由调用方填（四家专用 Host 各有一份 SelfIdentity）。库只比字符串，不解释 Tag 的含义。
 type GeneralIdentity =
     { /// 进程名（Proc.ids 用的 image，不带 .exe）
       Image: string
@@ -81,7 +81,7 @@ module GeneralAppInfo =
     let private firstError (checks: (bool * string) list) : string option =
         checks |> List.tryPick(fun (isBad, message) -> if isBad then Some message else None)
 
-    /// 附着之前的「不过时」核对：与 AppInfo.verify 同一套口径，只是进程名 / 显示名从参数来。
+    /// 附着之前的「不过时」核对：就是原先旧路那一套口径，只是进程名 / 显示名从参数来。
     /// 任何一条不通过就拒接，绝不改用 GetActiveObject 猜。
     let verify (info: GeneralAppInfo) : Result<unit, string> =
         let image = info.Identity.Image
@@ -142,7 +142,7 @@ module GeneralAppInfo =
         | Some message -> Error message
         | None -> Ok()
 
-    /// 第一道门：别把别家的实例认成自己。这里比的是调用方自己填的 Tag，不是枚举。
+    /// 第一道门：别把别家的实例认成自己。这里比的是调用方自己填的 Tag，库不认任何封闭种类。
     let ensureTag (tag: string) (info: GeneralAppInfo) : Result<unit, string> =
         if not (String.Equals(tag, info.Identity.Tag, StringComparison.OrdinalIgnoreCase)) then
             Error(
