@@ -366,10 +366,12 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -noColor -showLiveOutput
 场景：WordVSTO / ExcelVSTO 插件把当前实例抄到黑板上（`[…] 采集时间 …` / PID / ROT / HWND / EXE / 文档 / 路径），
 消费方只按 info 精确挂回那一只实例读写；**黑板的创建与销毁不归它管**，不并行，交接时数据要完整、不过时、没被别的任务改过。
 
-- `OsHost/AppInfo.fs`：`AppKind = Word | Excel | PowerPoint | AutoCAD`；`AppInfo` 存
-  `Kind/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath/Title`。
-  `AppInfo.ofText : string -> Result<AppInfo,string>` 直接吃插件剪贴板原文（也认 `KIND :` 行）；
-  `ofParts` / `describe`；`verify` 核「进程还在 / 启动时间不晚于采集 / HWND 仍属该 pid / EXE 一致 / ROT 名后缀 pid 一致」；
+- `OsHost/AppInfo.fs`：`AppKind = Word | Excel | PowerPoint | AutoCAD`；**`AppInfo` 是调用方要填的结构化参数表**：
+  `Kind/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath`，全是结构化字段，没有一行展示文本。
+  直接构造记录，或 `AppInfo.ofParts` 起最小必填集再 `with` 补 `DocName` / `DocPath`；`describe` 打印摘要。
+  **库不解析文本**：`ofText` 与展示用的 `Title` 已从 `OsHost` 移除 —— 插件改标题、键名、措辞只该改调用方。
+  采集时间由填报方给 Unix 毫秒，库不替你猜。
+  `verify` 核「进程还在 / 启动时间不晚于采集 / HWND 仍属该 pid / EXE 一致 / ROT 名后缀 pid 一致」；
   `ensureKind`；`checkDoc` 核「文档名字与路径一致、采集后没有再存盘」；`attach` = 种类 → 现场校验 → 按名取对象 → 交 work。
 - `OsHost.Com` 新增：`runningAt : string -> obj option`（`CreateItemMoniker("!", 名)` + `IRunningObjectTable.GetObject`，
   **不枚举 ROT、不退回 GetActiveObject、绝不新建**）、`register` / `revoke`（自测登记本地对象用）、
@@ -381,5 +383,9 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -noColor -showLiveOutput
   绝不新建、绝不 Quit、不改 `DisplayAlerts`。`PowerPointHost.Host.pidOf` 用 `app.HWND`。
 - **公寓**：`attach` 走 `Sta.run` 固定长活 STA 线程；后续对 Application 的读写也包 `Sta.run`。
   一步做完就直接 `AppInfo.attach info kind progIds work`，别让 RCW 跑出临时 STA 线程。
-- 验证：`xUnitHost/BlackboardTest.fs` 五条 Fact（`-method "*黑板*"`）；
-  真机那条设 `XUNITHOST_BLACKBOARD_FILE=<剪贴板文本存的文件>`，不设就 Skip。
+- **参考解析（不是库 API）**：`xUnitHost/BlackboardText.fs`，`module internal BlackboardText`：
+  `caption`（只贴标题行给人看）/ `ofText : string -> Result<AppInfo,string>` —— 把插件复制的展示文本
+  填成同一张参数表。格式强耦合的代码只留在这份里；用不上文本源的程序直接按字段填 `AppInfo`。
+- 验证：`xUnitHost/BlackboardTest.fs` 五条 Fact（`-method "*黑板*"`）；第一条同时验
+  「手工填报的参数表 == 参考解析出来的那条」；真机那条设
+  `XUNITHOST_BLACKBOARD_FILE=<剪贴板文本存的文件>`，不设就 Skip。

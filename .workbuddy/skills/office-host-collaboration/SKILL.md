@@ -233,6 +233,7 @@ XUNITHOST_CONVERT_DIR='C:\某个目录' XUNITHOST_CONVERT_BATCH=5 "$exe" ...
 | COM 细节 + 转换 | `WordHost` / `ExcelHost` / `PowerPointHost` / `AutoCADHost` | 与 Office 强相关的操作放对应库（六条转换也挂在各自 host 库末尾）；各自会 `identity` 报自己是谁（`PowerPointHost` 只做方式一，没有会话层） |
 | ppt 升级函数 | `PowerPointHost/PptIO.fs` + `PptUpgrade.fs`；验证 `xUnitHost/PptUpgradeTest.fs`（`-m "*pptUpgrade*"`） | `pptUpgrade app <路径>`：`PptIO.detectMacro` 判宏 → 纯规则 `route` → `PptToPptx`(24) / `PptToPptm`(25)；转完读回幻灯片文字指纹、已有同名先转临时文件、判不出宏失败且原件保留。PowerPoint 的 Open/SaveAs 是**强类型按值**参数；`WithWindow=msoFalse` 不弹窗口；`Application.Visible` 不许设 msoFalse |
 | 批量转格式 | `xUnitHost/ConvertCore.fs` + `Convert.fs`（**前部**）；`WordHost/DocIO.fs` + `DocUpgrade.fs`、`ExcelHost/BookIO.fs` + `XlsUpgrade.fs`（两个 host 库**末尾**） | 两侧对称：各一份文件放三个入口 —— 两条转换各自独立（格式码/后缀/核对/文案各归其主）+ 一个统一入口判宏 → 纯规则 `route` 选路；共用 COM 细节在各自的 `*IO.fs`；host 只回传 `(目标, 状态, 详情)`，`Convert.fs` 组装 Outcome、只留 `Paths.scan` / `Convert.all` / `readWordText` / `readBookPrint` / `canDelete`；真目录入口是两条按环境变量跑的 Fact（`ConvertTest.fs` 末段） |
+| 黑板展示文本参考解析 | `xUnitHost/BlackboardText.fs`（测试项目前部） | `module internal BlackboardText`：`caption` / `ofText` 把插件文本填成 `AppInfo` 参数表，只供调用方参考；**`OsHost` 不认文本，只认结构化参数表** |
 | 跨进程 | `xUnitHost/SecondProcessTest.fs` | 第二个进程 = 测试程序自己；地址 / 要说的话 / 回话文件都从环境变量来 |
 
 **项目的增减由用户定**：往现有项目里**加文件随时可以**（新 Fact、新公用模块都行）；但
@@ -287,6 +288,9 @@ bash .workbuddy/skills/office-host-collaboration/scripts/run-facts.sh -a -n   # 
 WorkBuddy 只读写、**不负责黑板的创建与销毁**。四家 host 各有一个
 `GetApplication(info) : Result<Application,string>`：按 ROT 名字精确附着 + 现场校验，
 绝不新建、绝不 Quit、不改应用状态；信息过时 / 种类错配 / 认错进程 / 文档被换过就 `Error`。
+**`AppInfo` 是结构化参数表，调用方按字段填报**，`OsHost` 里没有文本解析（`ofText` 已移出生产库）；
+把插件展示文本填成参数表的参考写法是测试项目 `xUnitHost/BlackboardText.fs`
+（`BlackboardText.ofText`，只供参考、不是库 API），插件改排版只改这一份。
 共用件在 `OsHost/AppInfo.fs` + `OsHost.Com.runningAt`，完整 API 见 `references/api.md`。
 验证 `xUnitHost/BlackboardTest.fs`（`-method "*黑板*"`），真机那条靠 `XUNITHOST_BLACKBOARD_FILE`。
 返回的 Application 与后续读写都放在 `OsHost.Sta.run` 那条固定 STA 线程上。

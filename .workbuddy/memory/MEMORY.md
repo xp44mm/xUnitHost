@@ -34,9 +34,9 @@
 
 ## 黑板模式（2026-11-07）
 - 场景：插件（WordVSTO / ExcelVSTO）把当前实例抄到黑板上（采集时间 / PID / ROT 名 `!WordVSTO.Instance.<pid>` / HWND / EXE / 文档 / 路径）；WorkBuddy 只按 info 挂回那一只实例读写，**不负责创建销毁**，不并行，交接要完整不过时。
-- `OsHost/AppInfo.fs`：`AppInfo` + `ofText` / `ofParts` / `verify` / `ensureKind` / `checkDoc` / `attach`；`OsHost.Com.runningAt` 按 moniker 名字取 ROT（不枚举、不退回 GetActiveObject、不新建），`register` / `revoke` 供自测。
+- **`AppInfo` 是结构化参数表**（调用方按字段填报：`Kind/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath`），`OsHost/AppInfo.fs` 只有 `ofParts` / `describe` / `verify` / `ensureKind` / `checkDoc` / `attach`；**库不解析展示文本**，`ofText` 与 `Title` 已移出（2026-11-07 11:31 用户定：文本格式紧耦合，不入库）。参考实现 `BlackboardText.ofText` 在测试项目 `xUnitHost/BlackboardText.fs`，只供用户参考。`OsHost.Com.runningAt` 按 moniker 名字取 ROT（不枚举、不退回 GetActiveObject、不新建），`register` / `revoke` 供自测。
 - 四家 `Host.GetApplication(info)` 形状对称（Word / Excel / PowerPoint / AutoCAD）：失败一律 `Error`，绝不新建 / Quit / 改 `DisplayAlerts`；返回的 Application 与后续读写都包 `OsHost.Sta.run`（固定长活 STA 线程）。
-- 验证 `xUnitHost/BlackboardTest.fs` 五条 Fact：`-method "*黑板*"`；真机那条设 `XUNITHOST_BLACKBOARD_FILE`。
+- 验证 `xUnitHost/BlackboardText.fs` + `BlackboardTest.fs` 五条 Fact：`-method "*黑板*"`；第一条验「手工填报参数表 == 参考解析结果」，真机那条设 `XUNITHOST_BLACKBOARD_FILE`。
 - 项目根已 `git init`（初始提交 `54db328`），后续用 git 快照回退，不再用带时间戳的备份副本。
 
 ## 测试风格

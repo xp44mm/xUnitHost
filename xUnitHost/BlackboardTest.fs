@@ -1,5 +1,6 @@
 ﻿/// 黑板模式：插件把「当前实例」抄到黑板上，WorkBuddy 只读写、不负责黑板的创建与销毁。
-/// 这里验证四家 GetApplication(info) 的入口：解析、认人、按 ROT 名字精确附着、拒接过时的信息。
+/// 生产库只认结构化参数表 AppInfo；把展示文本填成参数表的参考实现在 BlackboardText.fs（只供调用方参考）。
+/// 这里验证四家 GetApplication(info) 的入口：参数表、认人、按 ROT 名字精确附着、拒接过时的信息。
 /// 全部只读本机进程与 ROT，绝不新建 / 关闭 Word / Excel / PowerPoint / AutoCAD。
 namespace XUnitHost
 
@@ -18,8 +19,8 @@ type BlackboardProbe() =
 type BlackboardTest(output: ITestOutputHelper) =
 
     [<Fact>]
-    member this.``黑板信息 解析：插件剪贴板文本认得四家``() =
-        Report.title output "黑板信息解析：四家插件文本 → AppInfo"
+    member this.``黑板模式 结构化参数表：参考解析把插件文本填成 AppInfo``() =
+        Report.title output "黑板模式：库只认参数表，文本解析是测试项目的参考实现"
 
         let wordText =
             "[WordVSTO 当前 Word 实例] 采集时间 2026-11-07 08:39:53
@@ -60,19 +61,34 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
 路径 : (未保存)"
 
         let parse (label: string) (text: string) =
-            match AppInfo.ofText text with
+            match BlackboardText.ofText text with
             | Ok info ->
                 Report.line output label (AppInfo.describe info)
                 info
             | Error message -> failwith message
 
         let word = parse "Word" wordText
+        Report.line output "Word 标题" (BlackboardText.caption wordText)
         Should.equal AppKind.Word word.Kind
         Should.equal 27232 word.Pid
         Should.equal "!WordVSTO.Instance.27232" word.Rot
         Should.equal (nativeint 0x002304FA) word.Hwnd
         Should.equal (Some "文档1") word.DocName
         Should.equal None word.DocPath
+
+        // 库入口真正要的是这张参数表：手工按字段填报，与参考解析出来的那条应完全相同。
+        let filled =
+            { (AppInfo.ofParts
+                AppKind.Word
+                27232
+                "!WordVSTO.Instance.27232"
+                (nativeint 0x002304FA)
+                @"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE"
+                word.CapturedMs)
+              with DocName = Some "文档1"; DocPath = None }
+
+        Report.line output "手工填报" (AppInfo.describe filled)
+        Should.equal word filled
 
         let excel = parse "Excel" excelText
         Should.equal AppKind.Excel excel.Kind
@@ -93,11 +109,11 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         Report.line output "Word 采集" (Report.clock word.CapturedMs)
         Should.equal true (word.CapturedMs > 0L)
 
-        let incomplete = AppInfo.ofText "KIND : word\nPID : 123"
+        let incomplete = BlackboardText.ofText "KIND : word\nPID : 123"
         Report.line output "缺采集时间" (sprintf "%A" incomplete)
         Should.equal true (match incomplete with Error _ -> true | _ -> false)
 
-        Report.conclusion output "通过：四家文本各认各的，PID / ROT / HWND / 采集时间都读得出，缺采集时间就拒收"
+        Report.conclusion output "通过：四家文本由参考实现填成 AppInfo 参数表；手工填报同一条记录字段完全相同，库入口不认文本"
 
     [<Fact>]
     member this.``黑板模式 四家 GetApplication 拒接过时的信息，绝不新建``() =
@@ -219,8 +235,8 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
             Report.conclusion output "通过：按 moniker 名字精确取回；名字不在就 None，绝不新建"
 
     [<Fact>]
-    member this.``黑板模式 按黑板文本定位真机：活着就挂上，退了就明确报过时``() =
-        Report.title output "黑板模式：按剪贴板文本定位真机实例（只读，不新建不退出）"
+    member this.``黑板模式 按参考解析与参数表定位真机：活着就挂上，退了就明确报过时``() =
+        Report.title output "黑板模式：展示文本 → 参数表 → 四家 GetApplication（只读，不新建不退出）"
 
         let file = Environment.GetEnvironmentVariable "XUNITHOST_BLACKBOARD_FILE"
 
@@ -228,13 +244,14 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
             Assert.Skip "没设 XUNITHOST_BLACKBOARD_FILE：把插件复制的黑板文本存成文件再跑"
 
         let text = File.ReadAllText file
+        Report.line output "来源" "XUNITHOST_BLACKBOARD_FILE 的展示文本，由测试项目的参考实现转成参数表"
 
-        match AppInfo.ofText text with
+        match BlackboardText.ofText text with
         | Error message ->
-            Report.line output "解析" message
+            Report.line output "参考解析" message
             failwith message
         | Ok info ->
-            Report.line output "黑板" (AppInfo.describe info)
+            Report.line output "参数表" (AppInfo.describe info)
             Report.line output "文档" (sprintf "名字=%A 路径=%A" info.DocName info.DocPath)
 
             let image = AppInfo.image info.Kind
