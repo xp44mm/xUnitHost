@@ -11,7 +11,7 @@ open System
 open System.Globalization
 
 /// 四家 COM host 的种类（与 XUnitHost.Kind 互不相干，这儿是 OsHost 的通用种类）
-[<RequireQualifiedAccess>]
+[<RequireQualifiedAccess>][<Obsolete("改用 GeneralIdentity")>]
 type AppKind =
     | Word
     | Excel
@@ -37,7 +37,7 @@ type AppKind =
 /// 调用方要填的那张参数表：一条实例信息的全部字段，都是结构化值，没有一行展示文本。
 /// 直接构造记录即可（`{ Kind = ...; Pid = ...; ... }`），也可以用静态构造成员
 /// `AppInfo.create(...)` 起个最小集再 with 补齐。
-type AppInfo =
+type [<Obsolete("改用 GeneralAppInfo")>]AppInfo =
     { Kind: AppKind
       Pid: int
       /// ROT 注册名，例：!WordVSTO.Instance.27232；空串表示只能按 ProgID 找
