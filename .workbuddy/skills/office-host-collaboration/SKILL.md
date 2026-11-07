@@ -234,6 +234,7 @@ XUNITHOST_CONVERT_DIR='C:\某个目录' XUNITHOST_CONVERT_BATCH=5 "$exe" ...
 | ppt 升级函数 | `PowerPointHost/PptIO.fs` + `PptUpgrade.fs`；验证 `xUnitHost/PptUpgradeTest.fs`（`-m "*pptUpgrade*"`） | `pptUpgrade app <路径>`：`PptIO.detectMacro` 判宏 → 纯规则 `route` → `PptToPptx`(24) / `PptToPptm`(25)；转完读回幻灯片文字指纹、已有同名先转临时文件、判不出宏失败且原件保留。PowerPoint 的 Open/SaveAs 是**强类型按值**参数；`WithWindow=msoFalse` 不弹窗口；`Application.Visible` 不许设 msoFalse |
 | 批量转格式 | `xUnitHost/ConvertCore.fs` + `Convert.fs`（**前部**）；`WordHost/DocIO.fs` + `DocUpgrade.fs`、`ExcelHost/BookIO.fs` + `XlsUpgrade.fs`（两个 host 库**末尾**） | 两侧对称：各一份文件放三个入口 —— 两条转换各自独立（格式码/后缀/核对/文案各归其主）+ 一个统一入口判宏 → 纯规则 `route` 选路；共用 COM 细节在各自的 `*IO.fs`；host 只回传 `(目标, 状态, 详情)`，`Convert.fs` 组装 Outcome、只留 `Paths.scan` / `Convert.all` / `readWordText` / `readBookPrint` / `canDelete`；真目录入口是两条按环境变量跑的 Fact（`ConvertTest.fs` 末段） |
 | 黑板展示文本参考解析 | `xUnitHost/BlackboardText.fs`（测试项目前部） | `module internal BlackboardText`：`caption` / `ofText` 把插件文本填成 `AppInfo` 参数表，只供调用方参考；**`OsHost` 不认文本，只认结构化参数表** |
+| 通用参数表（另一条路） | `OsHost/GeneralAppInfo.fs` + `xUnitHost/GeneralAppInfoTest.fs` | 与 `AppKind` 解耦：`GeneralIdentity` 三个参数占位、`attachWith` 的 `acquire` / `work` 获取函数占位；`-method "*通用参数表*"`；**原 `AppInfo.fs` 一行未动** |
 | 跨进程 | `xUnitHost/SecondProcessTest.fs` | 第二个进程 = 测试程序自己；地址 / 要说的话 / 回话文件都从环境变量来 |
 
 **项目的增减由用户定**：往现有项目里**加文件随时可以**（新 Fact、新公用模块都行）；但
@@ -294,6 +295,12 @@ WorkBuddy 只读写、**不负责黑板的创建与销毁**。四家 host 各有
 共用件在 `OsHost/AppInfo.fs` + `OsHost.Com.runningAt`，完整 API 见 `references/api.md`。
 验证 `xUnitHost/BlackboardTest.fs`（`-method "*黑板*"`），真机那条靠 `XUNITHOST_BLACKBOARD_FILE`。
 返回的 Application 与后续读写都放在 `OsHost.Sta.run` 那条固定 STA 线程上。
+
+**另一条路（2026-11-07 12:01，用户要求「原文件不动，另起炉灶」）**：`OsHost/GeneralAppInfo.fs` 的
+`GeneralAppInfo` 与 `AppKind` 完全解耦 —— 进程名 / 显示名 / 种类标记由 `GeneralIdentity` 三个**参数**占位，
+「怎么取对象」「拿到 obj 之后怎么转强类型」由 `attachWith` 的 `acquire` / `work` 两个**获取函数**占位。
+校验口径与 `AppInfo` 一致，两条路并存、四家 host 仍在旧路上；验证 `-method "*通用参数表*"`（三条），
+完整 API 见 `references/api.md`。生产层不知道 `AppKind` 存在，桥接示例只在测试项目。
 
 ## 汇报格式
 

@@ -20,6 +20,8 @@
     <Compile Include="OsHost.fs" />
     <!-- 黑板模式：插件抄下来的实例信息 + 按 ROT 名字精确认人（四家 host 共用） -->
     <Compile Include="AppInfo.fs" />
+    <!-- 另一条路：与 AppKind 解耦的通用参数表，身份用参数、取对象用注入函数占位 -->
+    <Compile Include="GeneralAppInfo.fs" />
     <Compile Include="Address.fs" />
     <Compile Include="ProcHost.fs" />
   </ItemGroup>

@@ -37,6 +37,7 @@
 - **`AppInfo` 是结构化参数表**（调用方按字段填报：`Kind/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath`），`OsHost/AppInfo.fs` 的类型上有**静态构造成员 `AppInfo.create(...)`**（11:37 取代模块函数 `ofParts`），`AppKind.image()` / `kindName()` 与 `AppInfo.describe()` 是成员函数（11:44 由模块函数改归属，名字沿用），模块里只剩 `verify` / `ensureKind` / `checkDoc` / `attach`；**库不解析展示文本**，`ofText` 与 `Title` 已移出（2026-11-07 11:31 用户定：文本格式紧耦合，不入库）。参考实现 `BlackboardText.ofText` 在测试项目 `xUnitHost/BlackboardText.fs`，只供用户参考。`OsHost.Com.runningAt` 按 moniker 名字取 ROT（不枚举、不退回 GetActiveObject、不新建），`register` / `revoke` 供自测。
 - 四家 `Host.GetApplication(info)` 形状对称（Word / Excel / PowerPoint / AutoCAD）：失败一律 `Error`，绝不新建 / Quit / 改 `DisplayAlerts`；返回的 Application 与后续读写都包 `OsHost.Sta.run`（固定长活 STA 线程）。
 - 验证 `xUnitHost/BlackboardText.fs` + `BlackboardTest.fs` 五条 Fact：`-method "*黑板*"`；第一条验「手工填报参数表 == 参考解析结果」，真机那条设 `XUNITHOST_BLACKBOARD_FILE`。
+- **另一条路（12:01，用户「原文件不动，另起炉灶」）**：`OsHost/GeneralAppInfo.fs` 新增 `GeneralIdentity`（Image/Name/Tag 三参数占位）+ `GeneralAppInfo`（纯参数表 `create`/`describe()`/`verify`/`ensureTag`/`checkDoc`/`attachWith`/`attach`）；与 `AppKind` 完全解耦，`acquire`/`work` 是注入的获取函数，库不认 Office 类型、不新建不 Quit。**`AppInfo.fs` 与四家 host 一行未动**。`xUnitHost/GeneralAppInfoTest.fs` 三条 Fact（`-method "*通用参数表*"`），桥接示例 `GeneralBridge` 只在测试项目；ROT 探针正向挂回已实跑（register / acquire / revoke 排在同一条 `Sta.run` 线程）。
 - 项目根已 `git init`（初始提交 `54db328`），后续用 git 快照回退，不再用带时间戳的备份副本。
 
 ## 测试风格

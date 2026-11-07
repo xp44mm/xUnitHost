@@ -393,3 +393,24 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -noColor -showLiveOutput
 - 验证：`xUnitHost/BlackboardTest.fs` 五条 Fact（`-method "*黑板*"`）；第一条同时验
   「手工填报的参数表 == 参考解析出来的那条」；真机那条设
   `XUNITHOST_BLACKBOARD_FILE=<剪贴板文本存的文件>`，不设就 Skip。
+
+### 另一条路：GeneralAppInfo（2026-11-07 12:01，用户要求「原文件不动，另起炉灶」）
+
+`OsHost/AppInfo.fs`、四家 `GetApplication(info)` 一行未动，两条路并存。新文件 `OsHost/GeneralAppInfo.fs`：
+
+- `GeneralIdentity`：**参数占位**，取代 `AppKind` 上那两个 match —— `Image`（进程名）/ `Name`（显示名）/
+  `Tag`（调用方自己的种类标记）；`static member create (image, name, tag)`。库只比字符串、不解释 Tag，
+  四家之外的第五家不用改库。
+- `GeneralAppInfo`：纯参数表 `Identity/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath`，
+  `static member create (identity, pid, rot, hwnd, exePath, capturedMs)` / `info.describe()`。
+- `module GeneralAppInfo`：`verify`（与 `AppInfo.verify` 同口径，另多一条「Image 为空」）、
+  `ensureTag`（比 Tag，不比枚举）、`checkDoc`（与 `AppInfo.checkDoc` 同文案）、
+  `defaultAcquire`（ROT 名优先，空则按 ProgID 列表）、
+  **`attachWith info tag acquire work`** —— `acquire : GeneralAppInfo -> obj option` 与
+  `work : obj -> Result<'T,string>` 是**获取函数占位**，由调用方注入；`attach` 是套默认 `defaultAcquire` 的便捷版。
+  全程 `Sta.run` 固定 STA 线程；取不到就 `Error`，绝不新建 / Quit / 退回 GetActiveObject。
+- 生产层**不知道 `AppKind` 存在**；`AppInfo → GeneralAppInfo` 的桥接示例 `module internal GeneralBridge`
+  留在测试项目 `xUnitHost/GeneralAppInfoTest.fs`（不是库 API）。
+- 验证：三条 Fact，`-method "*通用参数表*"`。其中「获取函数占位」那条用 `Com.register` 在当前进程登记
+  `BlackboardProbe`，`register / acquire / revoke` 都排在**同一条** `Sta.run` 线程上
+  （避免跨公寓、也避免 `Sta.run` 嵌套），正向挂回 `Ok "XUnitHost.BlackboardProbe"` —— 不需要 Office 的完整附着链。
