@@ -100,7 +100,15 @@ XUNITHOST_CONVERT_DIR='C:\目录' XUNITHOST_CONVERT_BATCH=10 "$exe" -showLiveOut
   2. 老 .xls 被打开后**原件被改写**（683520→684032 B、md5 变了）。目录外备份与 `TestResults/验一张-转换前原件.xls` 都保住了转换前的 683520 字节，可还原。
   3. `.xlsx` 没生成（转换失败），但**失败原因没打印**：`Should.equal booksBefore booksAfter` 排在逐份 outcome 报告之前，Fact 先 FAIL。下次把报告挪到断言前。
 - 断言在 `deleteVerified` 之前 → **原件一份都没进回收站**；目录残留仍是 xls 1237 / doc 2803 / ppt 90。现场 EXCEL.EXE pid 30816 仍在（工作簿数 0），WINWORD / POWERPNT / xUnitHost 全 0。
-- 待定：重抄黑板 / 常驻实例别只放一本未保存空表 / 只读打开或转副本避免改写原件 / 是否改造 verify 的 HWND 检查。
+- **15:5x 用户拍板（只答第 ① 项）**：「你只管你自己的 excel 文件，其他文件的 hwnd 你不校验，你只是借用 excel 进程」→ **不重抄黑板、插件也不用每轮重抄**；挂回只认进程身份，HWND 是别人文档窗口的句柄，不参与判断。
+
+**借用进程口径（已实现并验证，2026-11-07 15:5x）**
+- `OsHost/GeneralAppInfo.fs` 加公开 `borrowProcess (info) = { info with Hwnd = 0n }`：verify 本来就把 `Hwnd=0n` 定义为「没填窗口、不校验」；PID 存活 / 采集时间 / 启动时刻 / EXE / ROT 名后缀一条不少。**库不改校验规则**，只给「借用进程」一个正式名字；原表 HWND 留在调用方当数据，报告照实打印。
+- `AttachedConvertTest.fs`：`Attached.borrow = GeneralAppInfo.borrowProcess`；两条挂回 Fact 都用借用表；新增 `ownBooksLeft`（按 FullName 只数自己本轮打开的文件）。**去掉 `Should.equal booksBefore booksAfter`**：用户开着几本工作簿不归这条通道管，不再因 Excel 关掉用户空表而 FAIL；改成只断言「自己开的都关了」+「应用开关恢复原值」+「常驻 pid 还在、进程没多没少」。逐份 outcome 报告挪到所有断言之前，失败原因不会再被断言挡住。
+- 新 Fact `-method "*借用进程*"`（纯逻辑）：换了 HWND 的旧表被拒接、借用表放行；PID 不在 / ROT 后缀不符 / EXE 不符 / 采集时间缺失 / Image 为空一律仍拒接。
+- 验证：`dotnet build` 0 警告 0 错误；`*借用进程*` 1/1、`*只读核对*` 1/1（**HWND 已过时的旧黑板现在能挂回 pid 30816**）、`*通用参数表*` 5/5、`*黑板*` 4 条（3 通过 1 Skip）。`-method "*黑板*"` 曾误捞新 Fact（名字带「黑板」），已改名 `*只读核对*`，避免污染既有回归口径。
+- 本轮**磁盘一个文件没动**：原件仍 684032 B（上次被 Excel 改写）、备份/留档 683520 B、`.xlsx/.xlsm` 都未生成、目录残留 4130 份。git 快照 `16d3080`（改动前）。
+- **仍未处理（用户未答）**：② 原件被 Excel 改写要不要还原成 683520 B；③ 只读打开 / 转副本避免改写原件；④ 重跑验一张查清 `.xlsx` 为什么没生成（报告前置已就绪，重跑就能看到 Detail）。
 
 ## 约定与坑
 - 用户平时开着 Word / Excel / acad（真图纸表格）：需要「从零起实例」的 Fact 开头 `requireClean "WINWORD"`，环境不干净 `Assert.Skip`，**绝不为跑通去关用户实例**；被跳过是正常现象。

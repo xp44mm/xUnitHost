@@ -81,7 +81,17 @@ module GeneralAppInfo =
     let private firstError (checks: (bool * string) list) : string option =
         checks |> List.tryPick(fun (isBad, message) -> if isBad then Some message else None)
 
+    /// 借用进程：只认进程身份，不认别人文档窗口的句柄。
+    /// HWND 是插件抄下来的「调用方当前打开的文档窗口」，借用方打开 / 关闭自己的文件后
+    /// 它必然被换掉（甚至那个窗口整个关掉），拿它当交接凭据会让下一轮凭空断链。
+    /// 这里把 Hwnd 置 0n —— verify 本来就把它定义为「没填这一项，就不校验窗口」；
+    /// PID 存活 / 采集时间 / 启动时刻 / EXE / ROT 名后缀一条不少。
+    /// 调用方仍可保留原表里的 HWND 数值作数据（报告、日志用），只是不交给入口判断。
+    let borrowProcess (info: GeneralAppInfo) : GeneralAppInfo =
+        { info with Hwnd = 0n }
+
     /// 附着之前的「不过时」核对：就是原先旧路那一套口径，只是进程名 / 显示名从参数来。
+    /// HWND 是**可选**凭据：Hwnd = 0n 表示借用进程、不校验窗口（见 borrowProcess）。
     /// 任何一条不通过就拒接，绝不改用 GetActiveObject 猜。
     let verify (info: GeneralAppInfo) : Result<unit, string> =
         let image = info.Identity.Image
