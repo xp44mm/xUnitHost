@@ -1,0 +1,47 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Word 主机（netstandard2.0）：Host.fs 管取/建实例与收尾；末尾 DocIO.fs + DocUpgrade.fs（.doc 升级统一入口）。
+    有实例取实例，没有就创建一个；不隐藏窗口、不退出，生命周期归调用方。
+    互操作程序集随本库一起输出，消费方不必装 Office PIA。
+  -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>WordHost</AssemblyName>
+    <RootNamespace>WordHost</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <!-- 与 OsHost / AutoCADHost / xUnitHost 同为 x64，免得 MSIL 引 AMD64 报 MSB3270 -->
+    <PlatformTarget>x64</PlatformTarget>
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Host.fs" />
+    <!-- 末尾：DocToDocx / DocToDocm / DocUpgrade 三个入口合在一份文件里；DocIO 是共用 COM 细节 -->
+    <Compile Include="DocIO.fs" />
+    <Compile Include="DocUpgrade.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 线程 / 进程账本 / 窗口 → 进程号 / COM 底层都在这一层，三家共用 -->
+    <ProjectReference Include="..\OsHost\OsHost.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 互操作程序集：本机 Office 16 类型库生成（强类型，不用晚绑定） -->
+    <Reference Include="Interop.Word16">
+      <HintPath>..\refs\interop16\Interop.Word16.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Interop.Office16">
+      <HintPath>..\refs\interop16\Interop.Office16.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="FSharp.Core" Version="10.1.403" />
+  </ItemGroup>
+
+</Project>

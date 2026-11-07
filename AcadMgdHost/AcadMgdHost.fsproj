@@ -1,0 +1,46 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    acadmgd 插件（netstandard2.0）：给 accoreconsole.exe / Core Console 用 NETLOAD 加载。
+    照 Autodesk 官方与 batchplot-plugin 的样例：只引用 acdbmgd.dll + accoremgd.dll，
+    **绝不引用 acmgd.dll / AcCui / AdUIMgd 等 UI 程序集** —— Core Console 没有 UI。
+
+    两处与其它 host 库刻意不同的地方：
+    - Private=false（Copy Local = False）：这两个 DLL AutoCAD 自带，复制到输出目录会变成两份，
+      Autodesk 官方明确要求 false。其它 host 库的 COM 互操作程序集不在 GAC，才用 true。
+    - 不引用 OsHost：程序集跑在 accoreconsole 进程内部，不带任何 COM / Win32 依赖。
+  -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>AcadMgdHost</AssemblyName>
+    <RootNamespace>AcadMgdHost</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <NuGetAudit>false</NuGetAudit>
+    <!-- FSharp.Core.dll 要跟着输出到 bin，NETLOAD 时才解析得到 -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Commands.fs" />
+    <!-- 程序集级 ExtensionApplication 属性必须在编译顺序最后一个文件 -->
+    <Compile Include="AssemblyInfo.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="AcDbMgd">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2020\acdbmgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="AcCoreMgd">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2020\accoremgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="FSharp.Core" Version="10.1.403" />
+  </ItemGroup>
+
+</Project>

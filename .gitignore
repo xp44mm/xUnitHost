@@ -1,0 +1,8 @@
+﻿# 编译 / 运行生成物（源文件与互操作程序集仍纳入版本管理）
+**/bin/
+**/obj/
+.vs/
+TestResults/
+*.user
+*.suo
+*.tmp

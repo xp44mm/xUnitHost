@@ -1,0 +1,29 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    操作系统层（netstandard2.0）：STA 线程、进程账本、窗口 → 进程号、时间、文件时间、COM 底层，
+    以及「常驻进程」的地址格式（Address.fs）和起 / 关两条通用命令（ProcHost.fs）。
+    三家 host 库都引它 —— 这些活儿三家一模一样，只该有一份。
+    不认 Office 类型，所以也不需要任何互操作程序集：只认句柄、进程号和 IUnknown。
+  -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>OsHost</AssemblyName>
+    <RootNamespace>OsHost</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="OsHost.fs" />
+    <Compile Include="Address.fs" />
+    <Compile Include="ProcHost.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="FSharp.Core" Version="10.1.403" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,9 @@
+﻿<Solution>
+  <Project Path="OsHost/OsHost.fsproj" />
+  <Project Path="WordHost/WordHost.fsproj" />
+  <Project Path="ExcelHost/ExcelHost.fsproj" />
+  <Project Path="PowerPointHost/PowerPointHost.fsproj" />
+  <Project Path="AutoCADHost/AutoCADHost.fsproj" />
+  <Project Path="AcadMgdHost/AcadMgdHost.fsproj" />
+  <Project Path="xUnitHost/xUnitHost.fsproj" />
+</Solution>

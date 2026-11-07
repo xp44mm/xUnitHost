@@ -1,0 +1,80 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    测试项目。编译顺序就是读的顺序：
+      前部：Common.fs（报告 / 认人 / 忙重试）→ Session.fs（会话层：地址、指纹、两种方式）
+            → ConvertCore.fs（测试项目这侧：Item / Outcome / Paths）
+            → Convert.fs（只做分派、批量、事后核对）
+      四条转换住在各自 host 库的末尾，两侧对称：WordHost/DocIO.fs + DocUpgrade.fs、
+            ExcelHost/BookIO.fs + XlsUpgrade.fs（各一份文件放两条转换 + 一个判宏选路的统一入口）
+      后面：各个 Fact。第二个进程就是它自己再起一份（SecondProcessTest.fs），没有别的程序。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- AutoCAD 的互操作程序集只有 64 位版本 -->
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 公用在最前，测试在后 -->
+    <Compile Include="Common.fs" />
+    <Compile Include="Session.fs" />
+    <Compile Include="ConvertCore.fs" />
+    <Compile Include="Convert.fs" />
+    <!-- Rx 版两条命令：进程生命周期事件流 + 组合子编排，前部公用件 -->
+    <Compile Include="ProcRx.fs" />
+    <Compile Include="HostGreetingTest.fs" />
+    <Compile Include="SecondProcessTest.fs" />
+    <Compile Include="CollaborationTest.fs" />
+    <Compile Include="ConvertTest.fs" />
+    <Compile Include="DnTest.fs" />
+    <Compile Include="PriceTest.fs" />
+    <Compile Include="DocSyncTest.fs" />
+    <Compile Include="CommandTest.fs" />
+    <Compile Include="RxCommandTest.fs" />
+    <Compile Include="PptUpgradeTest.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="FSharp.Core" Version="10.1.403" />
+    <PackageReference Include="FSharp.xUnit" Version="1.4.1" />
+    <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.2" />
+    <PackageReference Include="System.Reactive" Version="6.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OsHost\OsHost.fsproj" />
+    <ProjectReference Include="..\WordHost\WordHost.fsproj" />
+    <ProjectReference Include="..\ExcelHost\ExcelHost.fsproj" />
+    <ProjectReference Include="..\PowerPointHost\PowerPointHost.fsproj" />
+    <ProjectReference Include="..\AutoCADHost\AutoCADHost.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 互操作程序集不会沿 ProjectReference 传递：测试项目用强类型成员就得自己引 -->
+    <Reference Include="Interop.Word16">
+      <HintPath>..\refs\interop16\Interop.Word16.dll</HintPath>
+    </Reference>
+    <Reference Include="Interop.Excel16">
+      <HintPath>..\refs\interop16\Interop.Excel16.dll</HintPath>
+    </Reference>
+    <Reference Include="Interop.PowerPoint16">
+      <HintPath>..\refs\interop16\Interop.PowerPoint16.dll</HintPath>
+    </Reference>
+    <Reference Include="Interop.Office16">
+      <HintPath>..\refs\interop16\Interop.Office16.dll</HintPath>
+    </Reference>
+    <Reference Include="Autodesk.AutoCAD.Interop">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2020\Autodesk.AutoCAD.Interop.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
+    <Reference Include="Autodesk.AutoCAD.Interop.Common">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2020\Autodesk.AutoCAD.Interop.Common.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
+  </ItemGroup>
+
+</Project>

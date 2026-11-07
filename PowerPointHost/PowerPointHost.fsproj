@@ -1,0 +1,47 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PowerPoint 主机（netstandard2.0）：Host.fs 管取/建实例与收尾；末尾 PptIO.fs + PptUpgrade.fs（.ppt 升级统一入口）。
+    有实例取实例，没有就创建一个；不退出，生命周期归调用方。
+    互操作程序集由本机 Office 16 类型库（MSPPT.OLB）经 TlbImp 生成，随本库一起输出。
+  -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>PowerPointHost</AssemblyName>
+    <RootNamespace>PowerPointHost</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <!-- 与 OsHost / WordHost / ExcelHost / xUnitHost 同为 x64，免得 MSIL 引 AMD64 报 MSB3270 -->
+    <PlatformTarget>x64</PlatformTarget>
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Host.fs" />
+    <!-- 末尾：PptToPptx / PptToPptm / PptUpgrade 三个入口合在一份文件里；PptIO 是共用 COM 细节 -->
+    <Compile Include="PptIO.fs" />
+    <Compile Include="PptUpgrade.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 线程 / 进程账本 / COM 底层都在这一层，四家共用 -->
+    <ProjectReference Include="..\OsHost\OsHost.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 本机 Office 16 类型库生成（强类型，不用晚绑定）；Office 是 MsoTriState 等公共类型的家 -->
+    <Reference Include="Interop.PowerPoint16">
+      <HintPath>..\refs\interop16\Interop.PowerPoint16.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Interop.Office16">
+      <HintPath>..\refs\interop16\Interop.Office16.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="FSharp.Core" Version="10.1.403" />
+  </ItemGroup>
+
+</Project>
