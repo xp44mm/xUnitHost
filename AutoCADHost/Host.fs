@@ -62,7 +62,7 @@ module Host =
 
                 match pidOf app with
                 | Some number when number <> info.Pid ->
-                    Error(sprintf "ROT 名字指向的是 PID %d，不是黑板上的 %d" number info.Pid)
+                    Error(sprintf "获取到的 PID %d 与给定的 PID %d 不符" number info.Pid)
                 | _ -> Ok app
             with ex ->
                 Error(Errors.explain ex))

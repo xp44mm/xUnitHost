@@ -141,10 +141,13 @@ type ConvertTest(output: ITestOutputHelper) =
 //   XUNITHOST_CONVERT_BATCH   送回收站 / 报告的批次，默认 10（安全上限，别放大）
 //   XUNITHOST_CONVERT_CHUNK   一个 COM 进程里连续转多少份，默认 200
 //   XUNITHOST_CONVERT_BACKUP  备份目录；默认 <root>-bak<戳>，在目标目录之外
+//   XUNITHOST_CONVERT_KIND    doc|xls|ppt，只跑一类，建议分三轮；不设 = 全跑
+//   XUNITHOST_CONVERT_LIMIT   本轮最多处理 N 份（翻倍法 1→2→4→…）；不设 = 不限
+//   XUNITHOST_CONVERT_SKIP    已知失败清单（每行一个相对路径），本轮排除、不再反复重试
 // 顺序：完整备份 → 重名让位改名 → 分块转换 → 逐份读回核对 → 只把核对通过的原件送回收站。
 
 /// 真目录里的杂活：报告里用相对路径、删原件只认「核对通过」
-module private RealFolder =
+module internal RealFolder =
 
     open Microsoft.VisualBasic.FileIO
 
@@ -168,6 +171,24 @@ module private RealFolder =
         | null
         | "" -> None
         | value -> Some(Path.GetFullPath value)
+
+    /// 本轮只跑一类（doc / xls / ppt）；不设 KIND 就全跑。
+    let kind () = Paths.kindFromEnv ()
+
+    /// 该类型还剩多少（清点 / 收尾统计用，不受本轮上限影响）
+    let items (root: string) : Item list =
+        Paths.scan root |> Paths.filterByKind (kind ()) |> Paths.sortItems
+
+    /// 本轮真正要动的：翻倍法靠 LIMIT 取前 N 份，已知失败的不再挡在队首。
+    let roundItems (root: string) : Item list =
+        Paths.selectForRound root (kind ()) (Paths.scan root)
+
+    let limitLabel () =
+        match Paths.limitFromEnv () with
+        | Some n -> sprintf "%d 份" n
+        | None -> "不限（全量）"
+
+    let skipCount (root: string) = (Paths.skipFromEnv root).Count
 
     let private positive (name: string) (fallback: int) =
         let text = defaultArg (Option.ofObj (Environment.GetEnvironmentVariable name)) ""
@@ -292,10 +313,13 @@ type ConvertFolderTest(output: ITestOutputHelper) =
         | Some root ->
             Assert.True(Directory.Exists root, sprintf "目录不存在：%s" root)
 
-            let items = Paths.scan root
+            let items = RealFolder.items root
             let existing = items |> List.filter(fun i -> Paths.existingTargetsOf i.Source |> List.isEmpty |> not)
 
             Report.title output (sprintf "清点 %s" root)
+            Report.line output "本轮类型" (Paths.kindLabel (RealFolder.kind ()))
+            Report.line output "本轮上限" (RealFolder.limitLabel ())
+            Report.line output "已知失败跳过" (sprintf "%d 份" (RealFolder.skipCount root))
 
             Report.line
                 output
@@ -325,7 +349,7 @@ type ConvertFolderTest(output: ITestOutputHelper) =
             Report.requireClean "POWERPNT"
             Assert.True(Directory.Exists root, sprintf "目录不存在：%s" root)
 
-            let items = Paths.scan root
+            let items = RealFolder.roundItems root
             let batch = RealFolder.batchSize ()
             let chunk = RealFolder.chunkSize ()
             let backup = RealFolder.backupRoot root
@@ -345,6 +369,9 @@ type ConvertFolderTest(output: ITestOutputHelper) =
                     chunk
                     batch)
 
+            Report.line output "本轮类型" (Paths.kindLabel (RealFolder.kind ()))
+            Report.line output "本轮上限" (RealFolder.limitLabel ())
+            Report.line output "已知失败跳过" (sprintf "%d 份" (RealFolder.skipCount root))
             Report.line output "备份目录" backup
 
             // ---- 1. 完整备份：备份目录必须在目标目录之外，逐份比大小 ----
@@ -401,8 +428,8 @@ type ConvertFolderTest(output: ITestOutputHelper) =
                 Report.line output "　原因" (sprintf "%s —— %s" (RealFolder.rel root o.Source) o.Detail)
 
             Report.line output "原件入回收站" (sprintf "送进去 %d 份，送不进留下 %d 份" totalRemoved totalKept)
-            let left = Paths.scan root
-            Report.line output "目录现状" (sprintf "还剩 %d 份老格式" left.Length)
+            let left = RealFolder.items root
+            Report.line output "目录现状" (sprintf "本轮类型还剩 %d 份老格式" left.Length)
 
             // 失败的一份都不能把原件弄丢；备份目录必须真的有东西
             for o in bad do

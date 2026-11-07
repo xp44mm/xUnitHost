@@ -69,15 +69,38 @@ XUNITHOST_CONVERT_DIR='C:\目录' XUNITHOST_CONVERT_BATCH=10 "$exe" -showLiveOut
 
 **真目录闭环（2026-11-06 加固）**：`RealFolder` 依次做 ① 完整备份到**目标目录之外**（`<root>-bak<戳>`，保持目录结构、逐份比大小、可复用续跑）② 重名让位：现有同名新格式文件改名 `X-bak<戳>.docx`（`Paths.renameOf`），旧文件照常转，改名失败的旧文件跳过 ③ 分块转换（`XUNITHOST_CONVERT_CHUNK` 默认 200）④ 每份读回核对 ⑤ **只把核对通过的原件送回收站**（`Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile` + `RecycleOption.SendToRecycleBin`，不是 `File.Delete`），每批 `XUNITHOST_CONVERT_BATCH` 默认 10。备份目录可用 `XUNITHOST_CONVERT_BACKUP` 覆盖。失败的原件一律保留，Fact 不再断言 `bad.Length = 0`。
 
-## 续跑前必改（2026-11-07 用户现场反馈，未实现）
+## P0 安全开关（2026-11-07 用户反馈；15:2x 已实现 1/2 与分轮，超时看门狗未做）
 
-`C:\崔胜利` 全量转换跑到 777/4907 时用户叫停，反馈三个会卡住、需要人工关弹窗的问题。**下次续跑前先改代码，别直接重跑**。
+`C:\崔胜利` 全量转换跑到 777/4907 时用户叫停，反馈三个会卡住、需要人工关弹窗的问题。
+前两条和「按类型分三轮」已于 15:2x 实现并验证；**kill 型超时看门狗未做**（理由见本节末尾）。
 
 1. **Word「文档已损坏，是否修复」弹窗**：老 .doc 打开时 Word 弹修复对话框，COM 调用一直挂到有人去点掉。改 `WordHost/DocIO.fs` 的 `openDoc`：用 `Documents.OpenNoRepairDialog(...)` 取代 `Documents.Open`（这个方法专门抑制修复对话框），并设 `app.DisplayAlerts <- WdAlertLevel.wdAlertsNone`、`app.Options.ConfirmConversions <- false`；Excel 侧 `Workbooks.Open` 带 `CorruptLoad = XlCorruptLoad.xlNormalLoad`；PPT 侧保持 `Presentations.Open(..., WithWindow=msoFalse)` + `DisplayAlerts <- ppAlertsNone`。
 2. **必须以不启用宏的方式打开**：带宏文件（`AutoOpen` / `Workbook_Open`）会弹宏提示，同样挂住。Word / Excel / PowerPoint 三家 host 在起实例后统一设 `app.AutomationSecurity <- MsoAutomationSecurity.msoAutomationSecurityForceDisable`（值 3），**另存完恢复原值**。判宏只靠 `HasVBProject`（bool，不执行宏）或 OLE 目录流，绝不靠运行宏；`route` 选 `.docm/.xlsm/.pptm` 的规则不变。
 3. **按类型分三轮跑**：别再用 `Convert.all` 一轮混跑三类。给 `RealFolder` 加 `XUNITHOST_CONVERT_KIND=doc|xls|ppt`（`Paths.scan` 之后按后缀过滤），分三次调用。好处：某类弹窗/卡死不拖累另外两类、可按类调超时与实例重启策略、失败归因清楚。顺带给每份 COM 调用加超时，超时只 kill 自己起的 pid 再重启该实例，彻底免人工介入。
 
 补充：1/2 的弹窗很可能就是本次「日志 22 分钟无输出、23 份失败」的成因之一，但**未经证实**，别当结论写。
+
+**实现记录（2026-11-07 15:2x）**
+- `WordHost/DocIO.fs` → `Documents.OpenNoRepairDialog`；`WordHost/Host.fs` 的 quieten 加 `Options.ConfirmConversions=false`。
+- `ExcelHost/BookIO.fs` → `Workbooks.Open` 传满 15 参、末位 `CorruptLoad=xlNormalLoad`；quieten 加 `AskToUpdateLinks=false`。
+- 三家 `Host.fs` 各加公开 `module Security`（`apply` / `restore MsoAutomationSecurity`），quieten 统一设 `msoAutomationSecurityForceDisable`(3)，`runOnce` 在 work 之后 `Security.restore app previousSecurity`。判宏仍只用 `HasVBProject`，`route` 规则不变；PPT 的 `WithWindow=msoFalse` 保持。
+- `ConvertCore.fs` 的 `Paths` 加 `Kind` / `parseKind` / `kindFromEnv` / `kindLabel` / `filterByKind`；`ConvertTest.fs` 的 `RealFolder.items` 按 `XUNITHOST_CONVERT_KIND=doc|xls|ppt` 过滤，两条真目录 Fact 报告加「本轮类型」行，备份/改名/回收站只作用于本轮那一类。
+- 新 Fact 文件 `xUnitHost/ConvertSafetyTest.fs` 四条（`-method "*安全开关*"`）：三家真机各读回 DisplayAlerts / AutomationSecurity / 恢复值 + KIND 纯逻辑。编译 0 警告 0 错误；`*转换*` 4/4、`*pptUpgrade*` 2/2、真目录 `KIND=doc` 清点 2803 份且一个文件没动；现场 Office 残留 0。
+- 续跑分三轮（建议 ppt → xls → doc）：
+  `XUNITHOST_CONVERT_DIR='C:\崔胜利' XUNITHOST_CONVERT_KIND=ppt XUNITHOST_CONVERT_CHUNK=20 XUNITHOST_CONVERT_BATCH=10 xUnitHost/bin/Debug/net10.0/xUnitHost.exe -method "*原件送回收站*" -noColor -showLiveOutput`
+- **未做**：每份 COM 调用超时 + kill 自己起的 pid 重启实例。COM 跑在固定 STA 线程，按份中断要改 `Host` 暴露本次 pid 并配套重试/重启，风险高于收益；弹窗根因（1/2）已消除，先用 `CHUNK=20` 缩小单块影响面。要做再单开一轮。
+
+## 常驻 Excel 挂回式通道（2026-11-07 15:3x，验一张未通过）
+
+- 用户改架构：Excel 由 ExcelVSTO 插件常驻（`!ExcelVSTO.Instance.<pid>`），本侧只用 `ExcelHost.Host.GetApplication(info: GeneralAppInfo)` 挂回，**不新建 / 不 Quit / 不 kill / 不 requireClean**；只逐份开→升级→保存→关自己那本。范围：只 .xls 走常驻。
+- 代码：`Convert.fs` 的 `booksAttached app items`（**绝不用 `CloseAllWorkbooksWithoutSaving`**，那会关掉用户所有表）；`ConvertTest.fs` 的 `RealFolder` 改 internal；新增 `xUnitHost/AttachedConvertTest.fs` 两条 Fact（`-method "*只读核对*"` / `*挂回式升级一张*`）；黑板文本 `TestResults/崔胜利-Excel黑板.txt` 靠 `XUNITHOST_BLACKBOARD_FILE`。所有 COM 调用包 `OsHost.Sta.run`。
+- 只读挂回 1/1 通过：按 ROT 精确挂回 pid 30816、`Ok System.__ComObject`、工作簿数 1、原值 DisplayAlerts=True / AutomationSecurity=1、现场进程前后 `[30816]`。
+- **验一张 FAIL，三个坑（未修，等用户定）**：
+  1. 常驻实例里唯一的未保存空「工作簿1」在第一次 `Workbooks.Open` 时被 Excel 关掉 → 工作簿数 1→0，窗口 HWND `0x5f0594`→`0x1b04bc`，**黑板信息随即过时**，`verify` 拒接「HWND 已不属于 PID」。翻倍法会在第一轮后断链。
+  2. 老 .xls 被打开后**原件被改写**（683520→684032 B、md5 变了）。目录外备份与 `TestResults/验一张-转换前原件.xls` 都保住了转换前的 683520 字节，可还原。
+  3. `.xlsx` 没生成（转换失败），但**失败原因没打印**：`Should.equal booksBefore booksAfter` 排在逐份 outcome 报告之前，Fact 先 FAIL。下次把报告挪到断言前。
+- 断言在 `deleteVerified` 之前 → **原件一份都没进回收站**；目录残留仍是 xls 1237 / doc 2803 / ppt 90。现场 EXCEL.EXE pid 30816 仍在（工作簿数 0），WINWORD / POWERPNT / xUnitHost 全 0。
+- 待定：重抄黑板 / 常驻实例别只放一本未保存空表 / 只读打开或转副本避免改写原件 / 是否改造 verify 的 HWND 检查。
 
 ## 约定与坑
 - 用户平时开着 Word / Excel / acad（真图纸表格）：需要「从零起实例」的 Fact 开头 `requireClean "WINWORD"`，环境不干净 `Assert.Skip`，**绝不为跑通去关用户实例**；被跳过是正常现象。

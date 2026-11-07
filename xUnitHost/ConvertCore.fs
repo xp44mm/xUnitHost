@@ -37,6 +37,79 @@ module Paths =
     let isExcel (path: string) = path.EndsWith(".xls", StringComparison.OrdinalIgnoreCase)
     let isPpt (path: string) = path.EndsWith(".ppt", StringComparison.OrdinalIgnoreCase)
 
+    /// 按类型分轮跑：XUNITHOST_CONVERT_KIND=doc|xls|ppt，不设 / 不认得 = 全跑。
+    /// 某一类被弹窗或坏文件卡住，不拖累另外两类；失败归因也清楚。
+    type Kind =
+        | Doc
+        | Xls
+        | Ppt
+        | All
+
+    let parseKind (text: string) : Kind =
+        match (defaultArg (Option.ofObj text) "").Trim().ToLowerInvariant() with
+        | "doc" | ".doc" | "word" -> Doc
+        | "xls" | ".xls" | "excel" -> Xls
+        | "ppt" | ".ppt" | "powerpoint" -> Ppt
+        | _ -> All
+
+    let kindFromEnv () : Kind =
+        parseKind (Environment.GetEnvironmentVariable "XUNITHOST_CONVERT_KIND")
+
+    let kindLabel (kind: Kind) : string =
+        match kind with
+        | Doc -> "doc"
+        | Xls -> "xls"
+        | Ppt -> "ppt"
+        | All -> "全部"
+
+    let filterByKind (kind: Kind) (items: Item list) : Item list =
+        match kind with
+        | All -> items
+        | Doc -> items |> List.filter(fun i -> isWord i.Source)
+        | Xls -> items |> List.filter(fun i -> isExcel i.Source)
+        | Ppt -> items |> List.filter(fun i -> isPpt i.Source)
+
+    /// 本轮上限（翻倍法用）：XUNITHOST_CONVERT_LIMIT=N；不设 / 非法 = 不限，行为跟以前一样。
+    let limitFromEnv () : int option =
+        let text =
+            defaultArg (Option.ofObj (Environment.GetEnvironmentVariable "XUNITHOST_CONVERT_LIMIT")) ""
+
+        match Int32.TryParse text with
+        | true, n when n > 0 -> Some n
+        | _ -> None
+
+    /// 已知失败的旧文件清单：每行一个相对路径，# 开头是注释。
+    /// 失败件原件保留，会永远排在队首；翻倍推进时把它们排除，否则后面的轮次全被它们挡住。
+    let skipFromEnv (root: string) : Set<string> =
+        match Option.ofObj (Environment.GetEnvironmentVariable "XUNITHOST_CONVERT_SKIP") with
+        | None
+        | Some "" -> Set.empty
+        | Some file when not (File.Exists file) -> Set.empty
+        | Some file ->
+            File.ReadAllLines file
+            |> Array.map(fun l -> l.Trim())
+            |> Array.filter(fun l -> l <> "" && not (l.StartsWith "#"))
+            |> Array.map(fun l -> Path.GetFullPath(Path.Combine(root, l)))
+            |> Set.ofArray
+
+    /// 稳定排序：Directory.GetFiles 不保证顺序，翻倍法取「前 N 份」必须可复现。
+    let sortItems (items: Item list) : Item list =
+        items |> List.sortBy(fun i -> i.Source.ToLowerInvariant())
+
+    /// 本轮真正要动的：按类型 → 排除已知失败 → 稳定排序 → 取前 N 份。
+    let selectForRound (root: string) (kind: Kind) (items: Item list) : Item list =
+        let skipped = skipFromEnv root
+
+        let ordered =
+            items
+            |> filterByKind kind
+            |> List.filter(fun i -> not (skipped.Contains i.Source))
+            |> sortItems
+
+        match limitFromEnv () with
+        | Some n -> ordered |> List.truncate n
+        | None -> ordered
+
     /// 目标文件：没宏 → .docx/.xlsx/.pptx、有宏 → .docm/.xlsm/.pptm。
     /// 扫描阶段还没打开文件、不知道有没有宏，所以一律先按「没宏」占位；
     /// 真转的时候由 host 库里那六条转换各自定后缀。

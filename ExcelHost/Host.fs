@@ -7,6 +7,7 @@ namespace ExcelHost
 
 open System
 open System.Runtime.InteropServices
+open Microsoft.Office.Core
 open Microsoft.Office.Interop.Excel
 open OsHost
 
@@ -72,7 +73,7 @@ module Host =
 
                 match pidOf app with
                 | Some number when number <> info.Pid ->
-                    Error(sprintf "ROT 名字指向的是 PID %d，不是黑板上的 %d" number info.Pid)
+                    Error(sprintf "获取到的 PID %d 与给定的 PID %d 不符" number info.Pid)
                 | _ -> Ok app
             with ex ->
                 Error(Errors.explain ex))
@@ -149,8 +150,36 @@ module Host =
     // 语义照参考项目 ExcelHost.Host.exec：**一次进程、一个实例、一段活**。
     // 改了一处：碰到「已有 Excel 在跑」不弹框求人退出，直接返回 Error。
 
-    /// 后台跑，不给用户弹窗口；一切确认框都不弹
-    let private quieten (app: Application) : unit =
+    /// 转换专用：不启用宏。带 Workbook_Open 的老 .xls 会弹宏提示，把 COM 调用挂住；
+    /// ForceDisable 让宏一律不跑，判宏仍只看 HasVBProject。
+    /// 返回原值，收尾 restore 回去 —— 即便挂回用户实例也不留痕。
+    module Security =
+        let apply (app: Application) : MsoAutomationSecurity option =
+            let previous =
+                try
+                    Some app.AutomationSecurity
+                with _ ->
+                    None
+
+            (try
+                app.AutomationSecurity <- MsoAutomationSecurity.msoAutomationSecurityForceDisable
+             with _ ->
+                 ())
+
+            previous
+
+        let restore (app: Application) (previous: MsoAutomationSecurity option) : unit =
+            match previous with
+            | Some value ->
+                (try
+                    app.AutomationSecurity <- value
+                 with _ ->
+                     ())
+            | None -> ()
+
+    /// 后台跑，不给用户弹窗口；一切确认框都不弹。
+    /// 返回 AutomationSecurity 原值，runOnce 在活干完后恢复。
+    let private quieten (app: Application) : MsoAutomationSecurity option =
         (try
             app.Visible <- false
          with _ ->
@@ -160,6 +189,13 @@ module Host =
             app.DisplayAlerts <- false
          with _ ->
              ())
+
+        (try
+            app.AskToUpdateLinks <- false
+         with _ ->
+             ())
+
+        Security.apply app
 
     /// 放掉 RCW：Excel 尤其明显 —— 客户端还捏着引用时，Quit 之后进程就是不肯退
     let private release (target: obj) : unit =
@@ -189,13 +225,16 @@ module Host =
                 | Error message -> Error message
                 | Ok app ->
                     let pids = Set.difference (Proc.ids "EXCEL") before
-                    quieten app
+                    let previousSecurity = quieten app
 
                     let outcome =
                         try
                             Ok(work app)
                         with ex ->
                             Error(Errors.explain ex)
+
+                    // 另存完把宏安全级别恢复成起实例时的值，不留痕
+                    Security.restore app previousSecurity
 
                     (try
                         QuitWithoutSaving app

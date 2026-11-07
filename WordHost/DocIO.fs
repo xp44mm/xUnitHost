@@ -14,12 +14,15 @@ module DocIO =
 
     /// Word 的互操作参数是 **obj&**（按引用传），Excel 才是按值传 object。
     /// ConfirmConversions=false 别弹「要不要转换格式」，AddToRecent=false 不留最近文档。
+    /// **OpenNoRepairDialog**：老 .doc 一旦被判为损坏，Documents.Open 会弹「是否修复」模态框，
+    /// COM 调用就一直挂到有人去点掉；这个方法是 Office 专门给自动化用的，不弹那个框。
+    /// 再配合 Host.quieten 的 DisplayAlerts=wdAlertsNone / Options.ConfirmConversions=false。
     let openDoc (app: Application) (path: string) (readOnly: bool) : Document =
         let mutable fileName: obj = box path
         let mutable confirmConversions: obj = box false
         let mutable ro: obj = box readOnly
         let mutable addToRecent: obj = box false
-        app.Documents.Open(&fileName, &confirmConversions, &ro, &addToRecent)
+        app.Documents.OpenNoRepairDialog(&fileName, &confirmConversions, &ro, &addToRecent)
 
     /// 另存成新格式；格式码由各条转换自己带，这里不认得 .docx / .docm 谁是谁。
     let saveDocAs (fmt: obj) (doc: Document) (target: string) =

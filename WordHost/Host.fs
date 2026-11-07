@@ -7,6 +7,7 @@ namespace WordHost
 
 open System
 open System.Runtime.InteropServices
+open Microsoft.Office.Core
 open Microsoft.Office.Interop.Word
 open OsHost
 
@@ -63,7 +64,7 @@ module Host =
 
                 match pidOf app with
                 | Some number when number <> info.Pid ->
-                    Error(sprintf "ROT 名字指向的是 PID %d，不是黑板上的 %d" number info.Pid)
+                    Error(sprintf "获取到的 PID %d 与给定的 PID %d 不符" number info.Pid)
                 | _ -> Ok app
             with ex ->
                 Error(Errors.explain ex))
@@ -104,8 +105,36 @@ module Host =
     // 语义照参考项目 WordHost.Host.exec：**一次进程、一个实例、一段活**。
     // 改了一处：参考项目碰到「已有 Word 在跑」是弹框请人先退出，库不该弹框，直接返回 Error。
 
-    /// 后台跑，不给用户弹窗口；一切确认框都不弹，直接按默认走
-    let private quieten (app: Application) : unit =
+    /// 转换专用：不启用宏。带 AutoOpen / Workbook_Open 的老文件会弹宏提示，
+    /// 一样把 COM 调用挂住；ForceDisable 让宏一律不跑，判宏仍只看 HasVBProject。
+    /// 返回原值，收尾 restore 回去 —— 即便挂回用户实例也不留痕。
+    module Security =
+        let apply (app: Application) : MsoAutomationSecurity option =
+            let previous =
+                try
+                    Some app.AutomationSecurity
+                with _ ->
+                    None
+
+            (try
+                app.AutomationSecurity <- MsoAutomationSecurity.msoAutomationSecurityForceDisable
+             with _ ->
+                 ())
+
+            previous
+
+        let restore (app: Application) (previous: MsoAutomationSecurity option) : unit =
+            match previous with
+            | Some value ->
+                (try
+                    app.AutomationSecurity <- value
+                 with _ ->
+                     ())
+            | None -> ()
+
+    /// 后台跑，不给用户弹窗口；一切确认框都不弹，直接按默认走。
+    /// 返回 AutomationSecurity 原值，runOnce 在活干完后恢复。
+    let private quieten (app: Application) : MsoAutomationSecurity option =
         (try
             app.Visible <- false
          with _ ->
@@ -115,6 +144,14 @@ module Host =
             app.DisplayAlerts <- WdAlertLevel.wdAlertsNone
          with _ ->
              ())
+
+        // 格式确认框：老 .doc 常问「要不要转换格式」，没人点就挂住
+        (try
+            app.Options.ConfirmConversions <- false
+         with _ ->
+             ())
+
+        Security.apply app
 
     /// 放掉 RCW：进程外服务器要等客户端松开引用才肯真的退出。
     /// 顺带把终结器撵一遍，不然要等下一次 GC 才松手。
@@ -145,13 +182,16 @@ module Host =
                 | Error message -> Error message
                 | Ok app ->
                     let pids = Set.difference (Proc.ids "WINWORD") before
-                    quieten app
+                    let previousSecurity = quieten app
 
                     let outcome =
                         try
                             Ok(work app)
                         with ex ->
                             Error(Errors.explain ex)
+
+                    // 另存完把宏安全级别恢复成起实例时的值，不留痕
+                    Security.restore app previousSecurity
 
                     (try
                         QuitWithoutSaving app

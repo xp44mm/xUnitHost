@@ -12,9 +12,28 @@ open Microsoft.Office.Interop.Excel
 module BookIO =
 
     /// Excel 的互操作参数是**按值**传 object（Word 才是 obj&）。
-    /// UpdateLinks=0 是 xlUpdateLinksNever：别弹「要不要更新链接」
+    /// UpdateLinks=0 是 xlUpdateLinksNever：别弹「要不要更新链接」。
+    /// CorruptLoad=xlNormalLoad（第 15 个参数）：老 .xls 被判损坏时不进修复模式、不弹修复对话框。
+    let private missing: obj = Type.Missing
+
     let openBook (app: Application) (path: string) (readOnly: bool) : Workbook =
-        app.Workbooks.Open(path, box 0, box readOnly)
+        app.Workbooks.Open(
+            path,
+            box 0,
+            box readOnly,
+            missing,
+            missing,
+            missing,
+            missing,
+            missing,
+            missing,
+            missing,
+            missing,
+            missing,
+            missing,
+            missing,
+            box(int XlCorruptLoad.xlNormalLoad)
+        )
 
     let closeBook (book: Workbook) =
         try

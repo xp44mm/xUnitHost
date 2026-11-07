@@ -37,6 +37,10 @@
     <Compile Include="SecondProcessTest.fs" />
     <Compile Include="CollaborationTest.fs" />
     <Compile Include="ConvertTest.fs" />
+    <!-- 常驻 Excel 挂回式通道：排在 ConvertTest.fs 之后，复用 RealFolder -->
+    <Compile Include="AttachedConvertTest.fs" />
+    <!-- P0 安全开关：不弹修复框、不启用宏、按类型分三轮 -->
+    <Compile Include="ConvertSafetyTest.fs" />
     <Compile Include="DnTest.fs" />
     <Compile Include="PriceTest.fs" />
     <Compile Include="DocSyncTest.fs" />
