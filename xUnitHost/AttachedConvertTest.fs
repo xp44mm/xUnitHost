@@ -38,6 +38,19 @@ module private Attached =
     /// 黑板原文里的 HWND 仍留在 info 里当数据，报告照实打印。
     let borrow (info: GeneralAppInfo) : GeneralAppInfo = GeneralAppInfo.borrowProcess info
 
+    /// 弹窗兜底：意外的对话框躲不完（修复、共享工作簿、打印机、加载项……），
+    /// 与其一个个去压，不如让窗口露出来——哪一步卡住就把常驻 Excel 切到前台，
+    /// 人看见就能点掉，模态框一关 COM 调用自己返回，流程接着走。
+    /// 只做窗口激活（Win32 层面按 pid 找主窗口，模态对话框跟着主窗口一起到前台），
+    /// 不碰任何 COM 对象、不动进程、不动文件、不改窗口状态。
+    /// 返回值只表示「激活请求发出去了、没抛异常」——AppActivate 本身不回话。
+    let bringToFront (pid: int) : bool =
+        try
+            Microsoft.VisualBasic.Interaction.AppActivate pid
+            true
+        with _ ->
+            false
+
     /// 文件字节指纹：还原原件、判断 Excel 有没有把原件改写掉
     let md5 (path: string) =
         use stream = File.OpenRead path
@@ -458,7 +471,8 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                 | true, n when n > 0 -> n
                 | _ -> fallback
 
-            let timeoutSec = intEnv "XUNITHOST_CONVERT_TIMEOUT" 120
+            // 多久没进展就开始催人：默认 45 秒。XUNITHOST_CONVERT_TIMEOUT 仍认，作旧名兼容。
+            let hintSec = intEnv "XUNITHOST_CONVERT_POPUP_HINT" (intEnv "XUNITHOST_CONVERT_TIMEOUT" 45)
             let sameReasonLimit = intEnv "XUNITHOST_CONVERT_SAME_REASON" 3
             let projectRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."))
 
@@ -473,18 +487,22 @@ type AttachedConvertTest(output: ITestOutputHelper) =
             let say (text: string) = output.WriteLine("    " + text)
 
             // 进度每行立刻落盘：真卡在某个 COM 调用时，最后一行就是卡点。
+            // 主线程写、看门狗线程也写（催前台的提示），同一个文件要串行。
+            let progressGate = obj()
+
             let append (path: string) (line: string) =
-                let mutable ok = false
-                let mutable tries = 0
+                lock progressGate (fun () ->
+                    let mutable ok = false
+                    let mutable tries = 0
 
-                while not ok && tries < 5 do
-                    tries <- tries + 1
+                    while not ok && tries < 5 do
+                        tries <- tries + 1
 
-                    try
-                        File.AppendAllText(path, line + Environment.NewLine)
-                        ok <- true
-                    with _ ->
-                        System.Threading.Thread.Sleep 50
+                        try
+                            File.AppendAllText(path, line + Environment.NewLine)
+                            ok <- true
+                        with _ ->
+                            System.Threading.Thread.Sleep 50)
 
             let record (text: string) =
                 let line = sprintf "%s %s" (DateTime.Now.ToString("HH:mm:ss")) text
@@ -535,27 +553,71 @@ type AttachedConvertTest(output: ITestOutputHelper) =
             Report.line output "备份目录" backup
             Report.line output "进度日志" progressFile
             Report.line output "失败清单" (sprintf "%s（已有 %d 条历史失败）" failedFile failedSeen.Count)
-            Report.line output "停的条件" (sprintf "单份超时 %d 秒；同一原因连续 %d 次" timeoutSec sameReasonLimit)
+
+            Report.line
+                output
+                "弹窗策略"
+                (sprintf
+                    "不躲：%d 秒没进展就把 Excel 切到前台催人，点掉对话框自动继续；只激活窗口，不杀进程、不关你的表"
+                    hintSec)
+
+            Report.line output "停的条件" (sprintf "同一原因连续 %d 次（卡住不判失败，等你处理）" sameReasonLimit)
 
             let beforeProc = Report.procIds "EXCEL"
             let app = ExcelHost.Host.GetApplication borrowed |> Report.ok
             Report.line output "挂回" (sprintf "pid=%d rot=%s（校验只用进程身份）" info.Pid info.Rot)
 
-            // 卡住看门狗：只把阶段和秒数写进进度文件，绝不动用户的常驻 Excel
+            // 开跑时把常驻窗口切到前台一次：这一轮的对话框就在眼前，不用等到卡了才催。
+            // XUNITHOST_CONVERT_FOCUS=0 关掉（卡住催前台仍然生效）。
+            let focusOnStart =
+                match Environment.GetEnvironmentVariable "XUNITHOST_CONVERT_FOCUS" with
+                | null
+                | "" -> true
+                | text -> text.Trim() <> "0"
+
+            let raised = if focusOnStart then Attached.bringToFront info.Pid else false
+
+            Report.line
+                output
+                "界面"
+                (sprintf
+                    "开跑前置 %s：%s"
+                    (if focusOnStart then "开" else "关")
+                    (if not focusOnStart then "没动窗口，只在卡住时催"
+                     elif raised then "已把 Excel 切到前台，跑的时候有对话框你会立刻看见"
+                     else "没切动，请自己点任务栏里的 Excel 看一眼"))
+
+            // 弹窗兜底：不指望把所有对话框都躲掉。哪一步超过 hintSec 没动，就把 Excel 窗口切到前台，
+            // 之后每隔 hintSec 再催一次 —— 人看见就能点掉，COM 调用自己返回，流程接着走。
+            // 只激活窗口：不杀进程、不关用户开着的表、不改窗口状态。
             let mutable currentStage = "未开始"
             let mutable currentSince = DateTime.Now
             let mutable watchStop = false
-            let mutable alerted = false
+            let mutable lastHint = DateTime.MinValue
+            let mutable hintCount = 0
 
             let watchdog =
                 new System.Threading.Timer(
                     (fun (_: obj) ->
                         if not watchStop then
                             let secs = int (DateTime.Now - currentSince).TotalSeconds
+                            let sinceHint = (DateTime.Now - lastHint).TotalSeconds
 
-                            if secs >= timeoutSec && not alerted then
-                                alerted <- true
-                                record (sprintf "⚠ 疑似卡住：%s 已 %d 秒没完成（超时 %d 秒）" currentStage secs timeoutSec)),
+                            if secs >= hintSec && sinceHint >= float hintSec && hintCount < 40 then
+                                lastHint <- DateTime.Now
+                                hintCount <- hintCount + 1
+                                let front = Attached.bringToFront info.Pid
+
+                                record (
+                                    sprintf
+                                        "⚠ 没进展 %d 秒（%s）—— 多半弹了对话框；%s"
+                                        secs
+                                        currentStage
+                                        (if front then
+                                             "已把 Excel 切到前台，请点掉弹窗，点完我自动继续"
+                                         else
+                                             "没切动前台，请自己点任务栏里的 Excel 看一眼")
+                                )),
                     null,
                     5000,
                     5000
@@ -617,6 +679,10 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                                     let i = queue.[index]
                                     index <- index + 1
                                     let rel = RealFolder.rel root i.Source
+                                    // 每份重新起表：上一份的等待不算到这一份头上，催前台也从这一份重新计
+                                    currentStage <- sprintf "[%d/%d] 开始 %s" index queue.Length rel
+                                    currentSince <- DateTime.Now
+                                    lastHint <- DateTime.MinValue
                                     record (sprintf "[%d/%d] 开始 %s" index queue.Length rel)
                                     let clock = System.Diagnostics.Stopwatch.StartNew()
 
@@ -804,6 +870,11 @@ type AttachedConvertTest(output: ITestOutputHelper) =
             | Error _ -> ()
 
             Report.line output "本轮结果" (sprintf "队列 %d 份，成功 %d 份，失败 %d 份" queue.Length okCount failCount)
+
+            Report.line
+                output
+                "催前台"
+                (sprintf "%d 次（%d 秒没进展就催一次；催了还没动，就是在等你在对话框中做选择）" hintCount hintSec)
 
             if stopReason <> "" then
                 Report.line output "停下原因" stopReason
