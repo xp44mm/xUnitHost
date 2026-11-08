@@ -35,6 +35,7 @@
 - `OsHost/GeneralAppInfo.fs`：`GeneralIdentity`（Image/Name/Tag）+ `GeneralAppInfo`（`create`/`describe`/`verify`/`ensureTag`/`defaultAcquire`/`attachWith`/`attach`/**`borrowProcess`**）；库不认 Office 类型、不解析文本、不新建不 Quit。`OsHost.Com.runningAt` 按 moniker 名取 ROT（不枚举、不退回 GetActiveObject、不新建）。
 - 四家 `Host.SelfIdentity`（Word `WINWORD/Word/word`、Excel `EXCEL/Excel/excel`、PPT `POWERPNT/PowerPoint/ppt`、CAD `acad/AutoCAD/acad`）+ `Host.GetApplication(info)` 走 `GeneralAppInfo.attach`（强转 + pid 核对），失败一律 Error，绝不新建/Quit/改显示开关。
 - **文档级交接检查已取消**（13:51）：`checkDoc` 两路都删，`DocName`/`DocPath` 只收数据不参与判断。
+- **`GeneralAppInfo` 只装认进程的字段**（11-08，`0dba505`）：`Identity/Pid/Rot/Hwnd/ExePath/CapturedMs`；文档名/路径搬进同文件的新记录 `GeneralDocInfo`（`Name`/`Path`/`create`/`empty`/`describe`），纯报告数据。文本源用 `BlackboardText.docOfText` 另取。
 - 旧 `AppInfo.fs`（`AppKind`）已 Obsolete 后整份删除，旧实现在 `19d7d0c` 之前；`GeneralBridge` 与旧对照 Fact 已删。
 
 ## 测试风格

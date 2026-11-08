@@ -134,7 +134,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
         let wrongRot = { borrowed with Rot = "!ExcelVSTO.Instance.999999" }
         let wrongExe = { borrowed with ExePath = @"C:\nowhere\OTHER.EXE" }
         let noClock = { borrowed with CapturedMs = 0L }
-        let noImage = { borrowed with Identity = GeneralIdentity.create ("", "Excel", "excel") }
+        let noImage = { borrowed with Image = "" }
 
         Report.line output "黑板原值" (info.describe())
         Report.line output "挂回用表" (borrowed.describe())
@@ -187,13 +187,13 @@ type AttachedConvertTest(output: ITestOutputHelper) =
     member this.``常驻 Excel：按参数表挂回，只读核对，一个文件都不动``() =
         let info, doc = Attached.board () |> Report.ok
         let borrowed = Attached.borrow info
-        let before = Report.procIds info.Identity.Image
+        let before = Report.procIds info.Image
 
         Report.title output "常驻 Excel：黑板参数表 → GetApplication 挂回（只读）"
         Report.line output "参数表" (info.describe())
         Report.line output "文档" (doc.describe())
         Report.line output "交接" (sprintf "借用进程，HWND %A 只作数据、不校验；挂回用表 %s" info.Hwnd (borrowed.describe()))
-        Report.line output "现场" (sprintf "%s 进程 %A" info.Identity.Image (Set.toList before))
+        Report.line output "现场" (sprintf "%s 进程 %A" info.Image (Set.toList before))
 
         let attached = ExcelHost.Host.GetApplication borrowed
 
@@ -223,8 +223,8 @@ type AttachedConvertTest(output: ITestOutputHelper) =
 
         Should.equal (Some info.Pid) pid
 
-        let after = Report.procIds info.Identity.Image
-        Report.line output "收尾" (sprintf "%s 进程 %A" info.Identity.Image (Set.toList after))
+        let after = Report.procIds info.Image
+        Report.line output "收尾" (sprintf "%s 进程 %A" info.Image (Set.toList after))
         Should.equal before after
         Should.equal true (Set.contains info.Pid before)
 
@@ -694,7 +694,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                                         record text
                                         record (sprintf "  本份耗时 %.1f 秒" clock.Elapsed.TotalSeconds)
 
-                                    if not (Set.contains info.Pid (Report.procIds info.Identity.Image)) then
+                                    if not (Set.contains info.Pid (Report.procIds info.Image)) then
                                         stopReason <- sprintf "常驻 Excel pid %d 已不在" info.Pid
                                         record ("停：" + stopReason)
                                     else

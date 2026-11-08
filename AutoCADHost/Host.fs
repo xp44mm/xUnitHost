@@ -45,18 +45,17 @@ module Host =
         with _ ->
             None
 
-    /// 这家 host 自己的身份参数：原来 AppKind.image() / kindName() 里 AutoCAD 那一支搬到专用 Host。
-    /// 调用方填 GeneralAppInfo 的 Identity 就用它（进程名 / 显示名 / 种类标记三件套）。
-    let SelfIdentity : GeneralIdentity =
-        GeneralIdentity.create ("acad", "AutoCAD", "acad")
+    /// 这家 host 的进程名：填 GeneralAppInfo 的 Image 就用它（Proc.ids 的口径，不带 .exe）。
+    let SelfImage : string = "acad"
 
     /// 按插件抄下来的 GeneralAppInfo 精确挂回那一只 AutoCAD 实例。
     /// 只附着、不新建、不 Quit、不改应用状态 —— 冷启动分钟级，这里连碰都不会碰新建那条路。
     /// 返回的 AcadApplication 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
+    /// 信息过时 / ROT 里没有这个名字 / 认错进程，一律 Error。
     /// 文档级交接检查（换了图纸 / 采集后存过盘等）按用户要求推迟，暂不做；
     /// 图纸名 / 路径本来就不在 info 里（GeneralDocInfo 单列），认人只看进程身份。
     let GetApplication (info: GeneralAppInfo) : Result<AcadApplication, string> =
-        GeneralAppInfo.attach info SelfIdentity.Tag progIds (fun raw ->
+        GeneralAppInfo.attach info progIds (fun raw ->
             try
                 let app = raw :?> AcadApplication
 

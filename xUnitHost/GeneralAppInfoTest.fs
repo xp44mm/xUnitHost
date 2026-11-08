@@ -12,39 +12,31 @@ open OsHost
 type GeneralAppInfoTest(output: ITestOutputHelper) =
 
     [<Fact>]
-    member this.``通用参数表 身份常量在四家专用 Host，第五家不用改库``() =
-        Report.title output "通用参数表：四家身份常量在专用 Host，第五家不用改库"
+    member this.``通用参数表 进程名常量在四家专用 Host，第五家不用改库``() =
+        Report.title output "通用参数表：进程名常量在专用 Host，第五家不用改库"
 
-        // 原来 AppKind.image() / kindName() 四个分支的值，现在各归各家 Host 的 SelfIdentity
-        let word = WordHost.Host.SelfIdentity
-        let excel = ExcelHost.Host.SelfIdentity
-        let ppt = PowerPointHost.Host.SelfIdentity
-        let acad = AutoCADHost.Host.SelfIdentity
-        let fifth = GeneralIdentity.create ("et", "WPS 表格", "et")
+        // 原来 AppKind.image() 的四个分支，现在各归各家 Host 的 SelfImage；识别种类没有第二个字段
+        for label, image in
+            [ "Word", WordHost.Host.SelfImage
+              "Excel", ExcelHost.Host.SelfImage
+              "PPT", PowerPointHost.Host.SelfImage
+              "CAD", AutoCADHost.Host.SelfImage
+              "第五家", "et" ] do
+            Report.line2 output "进程名" label image
 
-        for identity in [ word; excel; ppt; acad; fifth ] do
-            Report.line output identity.Tag (identity.describe())
-
-        Should.equal "WINWORD" word.Image
-        Should.equal "Word" word.Name
-        Should.equal "EXCEL" excel.Image
-        Should.equal "POWERPNT" ppt.Image
-        Should.equal "acad" acad.Tag
-        Should.equal "et" fifth.Image
+        Should.equal "WINWORD" WordHost.Host.SelfImage
+        Should.equal "EXCEL" ExcelHost.Host.SelfImage
+        Should.equal "POWERPNT" PowerPointHost.Host.SelfImage
+        Should.equal "acad" AutoCADHost.Host.SelfImage
 
         let captured = Report.unixMs DateTime.Now
-        let info = GeneralAppInfo.create (fifth, 1234, "!WpsVSTO.Instance.1234", 0n, "", captured)
+        let info = GeneralAppInfo.create ("et", 1234, "!WpsVSTO.Instance.1234", 0n, "", captured)
         Report.line output "第五家参数表" (info.describe())
-        Should.equal "WPS 表格" info.Identity.Name
+        Should.equal "et" info.Image
+        // 表里只有「找到这只进程」要用的现场值：没有种类标记、没有显示名
+        Report.line output "字段" "Image / Pid / Rot / Hwnd / ExePath / CapturedMs"
 
-        let right = GeneralAppInfo.ensureTag "et" info
-        let wrong = GeneralAppInfo.ensureTag "word" info
-        Report.line output "同标记" (sprintf "%A" right)
-        Report.line output "错标记" (sprintf "%A" wrong)
-        Should.equal true (match right with Ok () -> true | _ -> false)
-        Should.equal true (match wrong with Error message -> message.Contains "不接" | _ -> false)
-
-        Report.conclusion output "通过：四家 + 第五家的身份都是 Host 上的三个参数，库里没有封闭种类；标记错配就拒接"
+        Report.conclusion output "通过：进程名是 Host 上的一个字符串，库里没有封闭种类、没有标记字段；第五家直接填 image 就能用"
 
     [<Fact>]
     member this.``通用参数表 获取函数占位：注入 acquire 挂到登记对象，不需要 Office``() =
@@ -54,8 +46,7 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
         let name = sprintf "!General.%d" Environment.ProcessId
         let probe = BlackboardProbe()
         let captured = Report.unixMs DateTime.Now
-        let identity = GeneralIdentity.create (selfImage, "测试进程", "probe")
-        let info = GeneralAppInfo.create (identity, Environment.ProcessId, name, 0n, "", captured)
+        let info = GeneralAppInfo.create (selfImage, Environment.ProcessId, name, 0n, "", captured)
 
         Report.line output "参数表" (info.describe())
         Report.line output "获取函数" "acquire = Com.runningAt info.Rot；work = 取回对象的类型名"
@@ -75,18 +66,18 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
                 let acquire (i: GeneralAppInfo) : obj option = Com.runningAt i.Rot
                 let work (raw: obj) : Result<string, string> = Ok(raw.GetType().FullName)
 
-                let hit = GeneralAppInfo.attachWith info "probe" acquire work
+                let hit = GeneralAppInfo.attachWith info acquire work
                 Report.line output "按名挂回" (sprintf "%A" hit)
                 Should.equal (Ok "XUnitHost.BlackboardProbe") hit
 
                 let missing = { info with Rot = "!General.不存在" }
-                let absent = GeneralAppInfo.attachWith missing "probe" acquire work
+                let absent = GeneralAppInfo.attachWith missing acquire work
                 Report.line output "名字不在" (sprintf "%A" absent)
                 Should.equal true (match absent with Error message -> message.Contains "绝不新建" | _ -> false)
 
-                let mismatch = GeneralAppInfo.attachWith info "word" acquire work
-                Report.line output "标记错配" (sprintf "%A" mismatch)
-                Should.equal true (match mismatch with Error message -> message.Contains "不接" | _ -> false)
+                let noImage = GeneralAppInfo.attachWith { info with Image = "" } acquire work
+                Report.line output "缺进程名" (sprintf "%A" noImage)
+                Should.equal true (match noImage with Error message -> message.Contains "Image" | _ -> false)
             finally
                 Sta.run(fun () -> Com.revoke cookie)
 
@@ -95,30 +86,28 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
             Report.line2 output "进程" image (sprintf "%A → %A" (Set.toList ids) (Set.toList now))
             Should.equal ids now
 
-        Report.conclusion output "通过：acquire 由调用方注入，按 ROT 名正向挂回；取不到 / 标记错配都明确拒接，四家进程没动"
+        Report.conclusion output "通过：acquire 由调用方注入，按 ROT 名正向挂回；取不到 / 缺进程名都明确拒接，四家进程没动"
 
     [<Fact>]
-    member this.``通用参数表 四家 Host 各用自己的 SelfIdentity，过时信息一律拒接``() =
-        Report.title output "通用参数表：四家 Host 各用自己的 SelfIdentity，过时信息一律拒接"
+    member this.``通用参数表 四家 Host 各用自己的 SelfImage，过时信息一律拒接``() =
+        Report.title output "通用参数表：四家 Host 各用自己的 SelfImage，过时信息一律拒接"
 
         let captured = Report.unixMs DateTime.Now
         let images = [ "WINWORD"; "EXCEL"; "POWERPNT"; "acad" ]
         let before = images |> List.map(fun image -> image, Report.procIds image)
 
-        let entries: (string * GeneralIdentity * (GeneralAppInfo -> Result<obj, string>)) list =
-            [ "Word", WordHost.Host.SelfIdentity,
+        let entries: (string * string * (GeneralAppInfo -> Result<obj, string>)) list =
+            [ "Word", WordHost.Host.SelfImage,
               (fun i -> WordHost.Host.GetApplication i |> Result.map(fun app -> box app))
-              "Excel", ExcelHost.Host.SelfIdentity,
+              "Excel", ExcelHost.Host.SelfImage,
               (fun i -> ExcelHost.Host.GetApplication i |> Result.map(fun app -> box app))
-              "PPT", PowerPointHost.Host.SelfIdentity,
+              "PPT", PowerPointHost.Host.SelfImage,
               (fun i -> PowerPointHost.Host.GetApplication i |> Result.map(fun app -> box app))
-              "CAD", AutoCADHost.Host.SelfIdentity,
+              "CAD", AutoCADHost.Host.SelfImage,
               (fun i -> AutoCADHost.Host.GetApplication i |> Result.map(fun app -> box app)) ]
 
-        for label, identity, call in entries do
-            let info =
-                GeneralAppInfo.create
-                    (identity, 999999, sprintf "!%s.Instance.999999" identity.Tag, 0n, "", captured)
+        for label, image, call in entries do
+            let info = GeneralAppInfo.create (image, 999999, "!self.Instance.999999", 0n, "", captured)
 
             Report.line output label (info.describe())
 
@@ -131,7 +120,7 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
             Report.line2 output "拒接" label text
             Should.equal true (
                 match result with
-                | Error message -> message.Contains identity.Image && message.Contains "绝不另起一个"
+                | Error message -> message.Contains image && message.Contains "绝不另起一个"
                 | _ -> false
             )
 
@@ -147,4 +136,4 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
             Report.line2 output "进程" image (sprintf "%A → %A" (Set.toList ids) (Set.toList now))
             Should.equal ids now
 
-        Report.conclusion output "通过：四家身份常量都来自专用 Host，过时信息四家入口都拒接、进程名各归各家；文档信息不在认进程的表里"
+        Report.conclusion output "通过：四家进程名常量都来自专用 Host，过时信息四家入口都拒接；文档信息不在认进程的表里"

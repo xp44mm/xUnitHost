@@ -2,9 +2,8 @@
 ///
 /// 生产库 OsHost 只认 GeneralAppInfo 那张参数表：调用方（插件 / 宿主程序）按字段填报，
 /// 库不认文本、不解析排版。插件改了标题、键名、措辞，只改这一份参考代码，不动库。
-/// 用不上文本源的程序请直接填参数表，身份取各家专用 Host 的 SelfIdentity：
-///   { GeneralAppInfo.create
-///       (WordHost.Host.SelfIdentity, 27232, "!WordVSTO.Instance.27232", 0n, "", captured) }
+/// 用不上文本源的程序请直接填参数表，进程名取各家专用 Host 的 SelfImage：
+///   GeneralAppInfo.create (WordHost.Host.SelfImage, 27232, "!WordVSTO.Instance.27232", 0n, "", captured)
 /// 文档名 / 路径不在这张表里：要就用 docOfText 另取一条 GeneralDocInfo（只作报告数据）。
 /// 解析出来的字段与手工填报的字段完全相同，四家 GetApplication(info) 分不出来源。
 namespace XUnitHost
@@ -77,26 +76,26 @@ module internal BlackboardText =
             | true, moment -> Some(Clock.unixMs moment)
             | _ -> None
 
-    /// 认出是哪一家 → 直接取那家专用 Host 上的身份参数（不再有封闭枚举）。
-    let private identityOfLine (lines: string array) : GeneralIdentity option =
+    /// 认出是哪一家 → 取那家专用 Host 上的进程名（现在表里只有进程名，没有种类标记）。
+    let private imageOfLine (lines: string array) : string option =
         match valueOf "KIND" lines with
-        | Some value when contains "word" value -> Some WordHost.Host.SelfIdentity
-        | Some value when contains "excel" value -> Some ExcelHost.Host.SelfIdentity
+        | Some value when contains "word" value -> Some WordHost.Host.SelfImage
+        | Some value when contains "excel" value -> Some ExcelHost.Host.SelfImage
         | Some value when contains "ppt" value || contains "powerpoint" value ->
-            Some PowerPointHost.Host.SelfIdentity
-        | Some value when contains "acad" value -> Some AutoCADHost.Host.SelfIdentity
+            Some PowerPointHost.Host.SelfImage
+        | Some value when contains "acad" value -> Some AutoCADHost.Host.SelfImage
         | _ -> None
 
     /// 从插件的标题 / ROT 名 / EXE 路径认是哪一家
-    let private identityOfText (text: string) : GeneralIdentity option =
+    let private imageOfText (text: string) : string option =
         if contains "WordVSTO" text || contains "WINWORD.EXE" text then
-            Some WordHost.Host.SelfIdentity
+            Some WordHost.Host.SelfImage
         elif contains "ExcelVSTO" text || contains "EXCEL.EXE" text then
-            Some ExcelHost.Host.SelfIdentity
+            Some ExcelHost.Host.SelfImage
         elif contains "PowerPointVSTO" text || contains "PPTVSTO" text || contains "POWERPNT" text then
-            Some PowerPointHost.Host.SelfIdentity
+            Some PowerPointHost.Host.SelfImage
         elif contains "AcadVSTO" text || contains "AutoCAD" text || contains "ACAD.EXE" text then
-            Some AutoCADHost.Host.SelfIdentity
+            Some AutoCADHost.Host.SelfImage
         else
             None
 
@@ -149,10 +148,10 @@ module internal BlackboardText =
         else
             let lines = linesOf text
 
-            let identity =
-                match identityOfLine lines with
+            let image =
+                match imageOfLine lines with
                 | Some value -> Some value
-                | None -> identityOfText text
+                | None -> imageOfText text
 
             let pid =
                 match valueOf "PID" lines with
@@ -164,7 +163,7 @@ module internal BlackboardText =
 
             let capturedMs = parseClock text |> Option.defaultValue 0L
 
-            if identity.IsNone then
+            if image.IsNone then
                 Error "认不出是哪一家 COM：黑板信息里既没有插件名，也没有 KIND 行"
             elif pid <= 0 then
                 Error "黑板信息里没有有效 PID：不猜、不新建"
@@ -173,7 +172,7 @@ module internal BlackboardText =
             else
                 Ok(
                     GeneralAppInfo.create
-                        (identity.Value,
+                        (image.Value,
                          pid,
                          valueOf "ROT" lines |> Option.defaultValue "",
                          valueOf "HWND" lines |> Option.map parseHwnd |> Option.defaultValue 0n,

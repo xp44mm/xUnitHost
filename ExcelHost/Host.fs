@@ -47,11 +47,9 @@ module Host =
 
     // ---------------- 黑板模式：按 GeneralAppInfo 挂回现成的那一只 ----------------
 
-    /// 这家 host 自己的身份参数：原来 AppKind.image() / kindName() 里 Excel 那一支搬到专用 Host。
-    /// 调用方填 GeneralAppInfo 的 Identity 就用它（进程名 / 显示名 / 种类标记三件套）。
+    /// 这家 host 的进程名：填 GeneralAppInfo 的 Image 就用它（Proc.ids 的口径，不带 .exe）。
     /// 旧路（AppInfo / AppKind）与并存的 Host.General 子模块都已撤掉，这里就是唯一的 GetApplication。
-    let SelfIdentity : GeneralIdentity =
-        GeneralIdentity.create ("EXCEL", "Excel", "excel")
+    let SelfImage : string = "EXCEL"
 
     /// 这只 Excel 的进程号（Excel 的 Application 自己有 Hwnd，一问就到）
     let pidOf (app: Application) : int option =
@@ -63,11 +61,11 @@ module Host =
     /// 按插件抄下来的 GeneralAppInfo 精确挂回那一只 Excel 实例。
     /// 只附着、不新建、不 Quit、不改应用状态 —— 黑板的生命周期不归这儿管。
     /// 返回的 Application 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
-    /// 种类标记不符 / 信息过时 / ROT 里没有这个名字 / 认错进程，一律 Error。
+    /// 信息过时 / ROT 里没有这个名字 / 认错进程，一律 Error。
     /// 文档级交接检查（换了工作簿 / 采集后存过盘等）按用户要求推迟，暂不做；
     /// 工作簿名 / 路径本来就不在 info 里（GeneralDocInfo 单列），认人只看进程身份。
     let GetApplication (info: GeneralAppInfo) : Result<Application, string> =
-        GeneralAppInfo.attach info SelfIdentity.Tag progIds (fun raw ->
+        GeneralAppInfo.attach info progIds (fun raw ->
             try
                 let app = raw :?> Application
 

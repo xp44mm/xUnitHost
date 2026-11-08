@@ -2,7 +2,7 @@
 /// 生产库只认结构化参数表 GeneralAppInfo；把展示文本填成参数表的参考实现在 BlackboardText.fs（只供调用方参考）。
 /// 这里验证四家 GetApplication(info) 的入口：参数表、认人、按 ROT 名字精确附着、拒接过时的信息。
 /// 文档级交接检查（换了文档 / 文档关了 / 采集后存过盘）按用户要求推迟（2026-11-07 13:51），暂不做。
-/// 旧路 AppKind / AppInfo 已于 14:11 删除，四家身份常量搬进各自 Host 的 SelfIdentity。
+/// 旧路 AppKind / AppInfo 已于 14:11 删除；11-08 又删掉 GeneralIdentity，四家只在 Host 上留一个 SelfImage。
 /// 全部只读本机进程与 ROT，绝不新建 / 关闭 Word / Excel / PowerPoint / AutoCAD。
 namespace XUnitHost
 
@@ -73,7 +73,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         let wordDoc = BlackboardText.docOfText wordText
         Report.line output "Word 标题" (BlackboardText.caption wordText)
         Report.line output "Word 文档" (wordDoc.describe())
-        Should.equal WordHost.Host.SelfIdentity word.Identity
+        Should.equal WordHost.Host.SelfImage word.Image
         Should.equal 27232 word.Pid
         Should.equal "!WordVSTO.Instance.27232" word.Rot
         Should.equal (nativeint 0x002304FA) word.Hwnd
@@ -83,7 +83,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         // 库入口真正要的是这张参数表：手工按字段填报，与参考解析出来的那条应完全相同。
         let filled =
             GeneralAppInfo.create
-                (WordHost.Host.SelfIdentity,
+                (WordHost.Host.SelfImage,
                  27232,
                  "!WordVSTO.Instance.27232",
                  (nativeint 0x002304FA),
@@ -94,18 +94,18 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         Should.equal word filled
 
         let excel = parse "Excel" excelText
-        Should.equal ExcelHost.Host.SelfIdentity excel.Identity
+        Should.equal ExcelHost.Host.SelfImage excel.Image
         Should.equal 18860 excel.Pid
         Should.equal "!ExcelVSTO.Instance.18860" excel.Rot
         Should.equal None (BlackboardText.docOfText excelText).Path
 
         let ppt = parse "PPT" pptText
-        Should.equal PowerPointHost.Host.SelfIdentity ppt.Identity
+        Should.equal PowerPointHost.Host.SelfImage ppt.Image
         Should.equal 4321 ppt.Pid
         Should.equal "!PptVSTO.Instance.4321" ppt.Rot
 
         let acad = parse "CAD" acadText
-        Should.equal AutoCADHost.Host.SelfIdentity acad.Identity
+        Should.equal AutoCADHost.Host.SelfImage acad.Image
         Should.equal 6550 acad.Pid
         Should.equal (Some "Drawing1.dwg") (BlackboardText.docOfText acadText).Name
 
@@ -120,15 +120,16 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
 
     [<Fact>]
     member this.``黑板模式 四家 GetApplication 拒接过时的信息，绝不新建``() =
-        Report.title output "黑板模式：过期 / 错配信息 → 四家 GetApplication 一律拒接"
+        Report.title output "黑板模式：过时信息 → 四家 GetApplication 一律拒接"
 
         let images = [ "WINWORD"; "EXCEL"; "POWERPNT"; "acad" ]
         let before = images |> List.map(fun image -> image, Report.procIds image)
 
         let captured = Report.unixMs DateTime.Now
+
         let dead =
             GeneralAppInfo.create
-                (WordHost.Host.SelfIdentity, 999999, "!WordVSTO.Instance.999999", 0n, "", captured)
+                (WordHost.Host.SelfImage, 999999, "!WordVSTO.Instance.999999", 0n, "", captured)
 
         Report.line output "输入" (dead.describe())
 
@@ -150,17 +151,21 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         show "PPT" ppt
         show "CAD" acad
 
-        Should.equal true (match word with Error message -> message.Contains "已经不在运行" | _ -> false)
-        Should.equal true (match excel with Error message -> message.Contains "不接" | _ -> false)
-        Should.equal true (match ppt with Error message -> message.Contains "不接" | _ -> false)
-        Should.equal true (match acad with Error message -> message.Contains "不接" | _ -> false)
+        // 表里只有进程身份：四家入口都会先核现场，同一张死掉的表对谁都是「已经不在运行」
+        let messageOf (result: Result<'T, string>) =
+            match result with
+            | Error message -> message
+            | Ok _ -> ""
+
+        for message in [ messageOf word; messageOf excel; messageOf ppt; messageOf acad ] do
+            Should.equal true (message.Contains "已经不在运行" && message.Contains WordHost.Host.SelfImage)
 
         for image, ids in before do
             let now = Report.procIds image
             Report.line2 output "进程" image (sprintf "%A → %A" (Set.toList ids) (Set.toList now))
             Should.equal ids now
 
-        Report.conclusion output "通过：四家都没起进程，过时报过时、Tag 错配报不接"
+        Report.conclusion output "通过：四家都没起进程，过时的表对哪个入口都是「已经不在运行」"
 
     // 文档级交接检查（换了文档 / 文档关了 / 采集后存过盘）按用户要求推迟（2026-11-07 13:51）：
     // 这条 Fact 与两路库里的 checkDoc 一起撤掉了；要找回旧实现看 git 历史（6be1725 之前）。
@@ -225,21 +230,21 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
             Report.line output "参数表" (info.describe())
             Report.line output "文档" (BlackboardText.docOfText(text).describe())
 
-            let image = info.Identity.Image
+            let image = info.Image
             let before = Report.procIds image
             Report.line output "现场" (sprintf "%s 进程 %A" image (Set.toList before))
 
             let result =
-                if info.Identity.Tag = WordHost.Host.SelfIdentity.Tag then
+                if image = WordHost.Host.SelfImage then
                     WordHost.Host.GetApplication info |> Result.map(fun app -> box app)
-                elif info.Identity.Tag = ExcelHost.Host.SelfIdentity.Tag then
+                elif image = ExcelHost.Host.SelfImage then
                     ExcelHost.Host.GetApplication info |> Result.map(fun app -> box app)
-                elif info.Identity.Tag = PowerPointHost.Host.SelfIdentity.Tag then
+                elif image = PowerPointHost.Host.SelfImage then
                     PowerPointHost.Host.GetApplication info |> Result.map(fun app -> box app)
-                elif info.Identity.Tag = AutoCADHost.Host.SelfIdentity.Tag then
+                elif image = AutoCADHost.Host.SelfImage then
                     AutoCADHost.Host.GetApplication info |> Result.map(fun app -> box app)
                 else
-                    Error(sprintf "认不出 tag=%s 的入口" info.Identity.Tag)
+                    Error(sprintf "认不出 image=%s 的入口" image)
 
             Report.line
                 output
