@@ -70,24 +70,25 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
             | Error message -> failwith message
 
         let word = parse "Word" wordText
+        let wordDoc = BlackboardText.docOfText wordText
         Report.line output "Word 标题" (BlackboardText.caption wordText)
+        Report.line output "Word 文档" (wordDoc.describe())
         Should.equal WordHost.Host.SelfIdentity word.Identity
         Should.equal 27232 word.Pid
         Should.equal "!WordVSTO.Instance.27232" word.Rot
         Should.equal (nativeint 0x002304FA) word.Hwnd
-        Should.equal (Some "文档1") word.DocName
-        Should.equal None word.DocPath
+        Should.equal (Some "文档1") wordDoc.Name
+        Should.equal None wordDoc.Path
 
         // 库入口真正要的是这张参数表：手工按字段填报，与参考解析出来的那条应完全相同。
         let filled =
-            { (GeneralAppInfo.create
+            GeneralAppInfo.create
                 (WordHost.Host.SelfIdentity,
                  27232,
                  "!WordVSTO.Instance.27232",
                  (nativeint 0x002304FA),
                  @"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE",
-                 word.CapturedMs))
-              with DocName = Some "文档1"; DocPath = None }
+                 word.CapturedMs)
 
         Report.line output "手工填报" (filled.describe())
         Should.equal word filled
@@ -96,7 +97,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         Should.equal ExcelHost.Host.SelfIdentity excel.Identity
         Should.equal 18860 excel.Pid
         Should.equal "!ExcelVSTO.Instance.18860" excel.Rot
-        Should.equal None excel.DocPath
+        Should.equal None (BlackboardText.docOfText excelText).Path
 
         let ppt = parse "PPT" pptText
         Should.equal PowerPointHost.Host.SelfIdentity ppt.Identity
@@ -106,7 +107,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         let acad = parse "CAD" acadText
         Should.equal AutoCADHost.Host.SelfIdentity acad.Identity
         Should.equal 6550 acad.Pid
-        Should.equal (Some "Drawing1.dwg") acad.DocName
+        Should.equal (Some "Drawing1.dwg") (BlackboardText.docOfText acadText).Name
 
         Report.line output "Word 采集" (Report.clock word.CapturedMs)
         Should.equal true (word.CapturedMs > 0L)
@@ -115,7 +116,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         Report.line output "缺采集时间" (sprintf "%A" incomplete)
         Should.equal true (match incomplete with Error _ -> true | _ -> false)
 
-        Report.conclusion output "通过：四家文本由参考实现填成 GeneralAppInfo；手工填报同一条记录字段完全相同，身份取自各家 Host"
+        Report.conclusion output "通过：四家文本由参考实现填成 GeneralAppInfo（只含进程信息），文档另取 GeneralDocInfo；手工填报同一条记录字段完全相同"
 
     [<Fact>]
     member this.``黑板模式 四家 GetApplication 拒接过时的信息，绝不新建``() =
@@ -222,7 +223,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
             failwith message
         | Ok info ->
             Report.line output "参数表" (info.describe())
-            Report.line output "文档" (sprintf "名字=%A 路径=%A" info.DocName info.DocPath)
+            Report.line output "文档" (BlackboardText.docOfText(text).describe())
 
             let image = info.Identity.Image
             let before = Report.procIds image

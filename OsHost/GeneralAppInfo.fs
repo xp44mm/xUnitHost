@@ -32,20 +32,20 @@ type GeneralIdentity =
     member this.describe () : string =
         sprintf "%s(tag=%s, image=%s)" this.Name this.Tag this.Image
 
-/// 通用参数表：一条实例信息的全部结构化值。没有枚举、没有展示文本、没有 COM 类型。
+/// 通用参数表：**只装认进程用的东西**。没有枚举、没有展示文本、没有 COM 类型、没有文档。
+/// 文档名 / 路径不参与认人（文档级交接检查已取消），另立 GeneralDocInfo，只当报告数据。
 type GeneralAppInfo =
     { Identity: GeneralIdentity
       Pid: int
       /// ROT 注册名；空串时按调用方给的 ProgID 列表找
       Rot: string
+      /// 窗口句柄；0n = 借用进程，不校验窗口
       Hwnd: nativeint
       ExePath: string
       /// 采集时刻（Unix 毫秒）：所有「过没过时」的判断都拿它当基准
-      CapturedMs: int64
-      DocName: string option
-      DocPath: string option }
+      CapturedMs: int64 }
 
-    /// 静态构造成员：最小必填集；文档名 / 路径按记录更新补上。
+    /// 静态构造成员：识别进程的最小必填集。
     static member create
         (
             identity: GeneralIdentity,
@@ -61,9 +61,7 @@ type GeneralAppInfo =
           Rot = rot
           Hwnd = hwnd
           ExePath = exePath
-          CapturedMs = capturedMs
-          DocName = None
-          DocPath = None }
+          CapturedMs = capturedMs }
 
     /// 一行摘要，贴报告 / 报错用
     member this.describe () : string =
@@ -74,6 +72,29 @@ type GeneralAppInfo =
             (if String.IsNullOrWhiteSpace this.Rot then "-" else this.Rot)
             this.Hwnd
             (Clock.show this.CapturedMs)
+
+/// 文档信息：插件抄下来的「当前文档名 / 落盘路径」。
+/// 与 GeneralAppInfo 分开的道理：那张表只用来认进程，文档换了、关了都不该影响认人；
+/// 这两个值只进报告 / 日志，不参与任何判断。
+type GeneralDocInfo =
+    { /// 文档名（不含路径），例如「文档1」「Book1」「Drawing1.dwg」
+      Name: string option
+      /// 落盘路径；新文档还没存过盘就是 None
+      Path: string option }
+
+    static member create (name: string option, path: string option) : GeneralDocInfo =
+        { Name = name; Path = path }
+
+    static member empty : GeneralDocInfo = { Name = None; Path = None }
+
+    /// 一行摘要，贴报告用
+    member this.describe () : string =
+        let show (value: string option) =
+            match value with
+            | Some text when not (String.IsNullOrWhiteSpace text) -> text
+            | _ -> "(无)"
+
+        sprintf "名字=%s 路径=%s" (show this.Name) (show this.Path)
 
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
 module GeneralAppInfo =
@@ -167,7 +188,7 @@ module GeneralAppInfo =
 
     /// 文档级交接检查（换了文档 / 文档关了 / 采集后存过盘）按用户要求**推迟**（2026-11-07 13:51）：
     /// 新路同样不做，`checkDoc` 已撤掉；要找回旧实现看 git 历史（`6be1725`）。
-    /// `GeneralAppInfo.DocName` / `DocPath` 字段保留：数据照收，只是暂不参与判断。
+    /// 2026-11-08 起文档信息整块搬出本表（GeneralDocInfo）：认进程的表里不再有文档字段。
 
     /// 默认获取函数：按 ROT 名精确取；没填 ROT 名就按调用方给的 ProgID 列表找。
     /// 必须在 Sta.run 那条固定 STA 线程上被调用（attachWith 已保证）。

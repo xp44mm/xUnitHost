@@ -3,9 +3,9 @@
 /// 生产库 OsHost 只认 GeneralAppInfo 那张参数表：调用方（插件 / 宿主程序）按字段填报，
 /// 库不认文本、不解析排版。插件改了标题、键名、措辞，只改这一份参考代码，不动库。
 /// 用不上文本源的程序请直接填参数表，身份取各家专用 Host 的 SelfIdentity：
-///   { (GeneralAppInfo.create
-///        (WordHost.Host.SelfIdentity, 27232, "!WordVSTO.Instance.27232", 0n, "", captured))
-///     with DocName = Some "文档1" }
+///   { GeneralAppInfo.create
+///       (WordHost.Host.SelfIdentity, 27232, "!WordVSTO.Instance.27232", 0n, "", captured) }
+/// 文档名 / 路径不在这张表里：要就用 docOfText 另取一条 GeneralDocInfo（只作报告数据）。
 /// 解析出来的字段与手工填报的字段完全相同，四家 GetApplication(info) 分不出来源。
 namespace XUnitHost
 
@@ -123,7 +123,23 @@ module internal BlackboardText =
         |> Array.tryFind(fun line -> line.StartsWith "[")
         |> Option.defaultValue "(没有标题行)"
 
+    /// 展示文本 → 非空行数组（每行去首尾空白）。进程信息与文档信息各取一次，都是从这儿切。
+    let private linesOf (text: string) : string array =
+        text.Replace("\r\n", "\n").Split '\n'
+        |> Array.map(fun line -> line.Trim())
+        |> Array.filter(fun line -> not (String.IsNullOrWhiteSpace line))
+
+    /// 文档信息：与识别进程的 GeneralAppInfo **分开**拿。缺键 /「(未保存)」都当没有，
+    /// 认不出也不报错 —— 它只用来贴报告，不参与认人。
+    let docOfText (text: string) : GeneralDocInfo =
+        if String.IsNullOrWhiteSpace text then
+            GeneralDocInfo.empty
+        else
+            let lines = linesOf text
+            GeneralDocInfo.create (docName lines, docPath lines)
+
     /// 参考解析：插件剪贴板原文 / 会话里贴的一段 / 存下来的 txt → GeneralAppInfo 参数表。
+    /// 只填认进程的字段；文档名 / 路径走 docOfText。
     /// 缺 PID / 采集时间 / 认不出种类，一律 Error —— 信息不完整就不该往下走。
     /// 注意这里只是「把展示文本填成参数表」，真正的现场校验在 OsHost.GeneralAppInfo.verify；
     /// 文档级交接检查按用户要求推迟（2026-11-07 13:51），暂不做。
@@ -131,10 +147,7 @@ module internal BlackboardText =
         if String.IsNullOrWhiteSpace text then
             Error "黑板信息是空的"
         else
-            let lines =
-                text.Replace("\r\n", "\n").Split '\n'
-                |> Array.map(fun line -> line.Trim())
-                |> Array.filter(fun line -> not (String.IsNullOrWhiteSpace line))
+            let lines = linesOf text
 
             let identity =
                 match identityOfLine lines with
@@ -158,14 +171,12 @@ module internal BlackboardText =
             elif capturedMs <= 0L then
                 Error "黑板信息里没有有效采集时间：无法判断信息是否过时"
             else
-                Ok
-                    { (GeneralAppInfo.create
+                Ok(
+                    GeneralAppInfo.create
                         (identity.Value,
                          pid,
                          valueOf "ROT" lines |> Option.defaultValue "",
                          valueOf "HWND" lines |> Option.map parseHwnd |> Option.defaultValue 0n,
                          exeLine lines,
-                         capturedMs))
-                      with
-                          DocName = docName lines
-                          DocPath = docPath lines }
+                         capturedMs)
+                )

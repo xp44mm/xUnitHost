@@ -22,7 +22,8 @@ open OsHost
 /// 黑板文本 → 参数表 → 挂回；两条 Fact 共用这一串
 module private Attached =
 
-    let info () : Result<GeneralAppInfo, string> =
+    /// 黑板文本 → 认进程的表 + 文档信息（读一次文件，两边都从同一段文本解析）
+    let board () : Result<GeneralAppInfo * GeneralDocInfo, string> =
         let file = Environment.GetEnvironmentVariable "XUNITHOST_BLACKBOARD_FILE"
 
         if String.IsNullOrWhiteSpace file then
@@ -30,7 +31,10 @@ module private Attached =
         elif not (File.Exists file) then
             Error(sprintf "黑板文件不存在：%s" file)
         else
-            File.ReadAllText file |> BlackboardText.ofText
+            let text = File.ReadAllText file
+            BlackboardText.ofText text |> Result.map(fun info -> info, BlackboardText.docOfText text)
+
+    let info () : Result<GeneralAppInfo, string> = board () |> Result.map fst
 
     type App = Microsoft.Office.Interop.Excel.Application
 
@@ -181,13 +185,13 @@ type AttachedConvertTest(output: ITestOutputHelper) =
 
     [<Fact>]
     member this.``常驻 Excel：按参数表挂回，只读核对，一个文件都不动``() =
-        let info = Attached.info () |> Report.ok
+        let info, doc = Attached.board () |> Report.ok
         let borrowed = Attached.borrow info
         let before = Report.procIds info.Identity.Image
 
         Report.title output "常驻 Excel：黑板参数表 → GetApplication 挂回（只读）"
         Report.line output "参数表" (info.describe())
-        Report.line output "文档" (sprintf "名字=%A 路径=%A" info.DocName info.DocPath)
+        Report.line output "文档" (doc.describe())
         Report.line output "交接" (sprintf "借用进程，HWND %A 只作数据、不校验；挂回用表 %s" info.Hwnd (borrowed.describe()))
         Report.line output "现场" (sprintf "%s 进程 %A" info.Identity.Image (Set.toList before))
 

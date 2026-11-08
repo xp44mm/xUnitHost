@@ -56,7 +56,7 @@ module Host =
     /// 返回的 Application 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
     /// 种类标记不符 / 信息过时 / ROT 里没有这个名字 / 认错进程，一律 Error。
     /// 文档级交接检查（换了文档 / 文档关了 / 采集后存过盘）按用户要求推迟，暂不做；
-    /// info 里的 DocName / DocPath 只是收下的数据，不参与判断。
+    /// 文档名 / 路径本来就不在 info 里（GeneralDocInfo 单列），认人只看进程身份。
     let GetApplication (info: GeneralAppInfo) : Result<Application, string> =
         GeneralAppInfo.attach info SelfIdentity.Tag progIds (fun raw ->
             try

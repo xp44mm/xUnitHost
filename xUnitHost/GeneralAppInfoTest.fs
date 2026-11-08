@@ -135,20 +135,16 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
                 | _ -> false
             )
 
-        // 文档级交接检查按用户要求推迟：字段照收，但不参与任何判断
-        let withDoc =
-            { (GeneralAppInfo.create (WordHost.Host.SelfIdentity, 1, "", 0n, "", captured))
-              with
-                  DocName = Some "文档1"
-                  DocPath = Some @"C:\tmp\文档1.docx" }
-
-        Report.line output "文档字段" (sprintf "名字=%A 路径=%A" withDoc.DocName withDoc.DocPath)
-        Should.equal (Some "文档1") withDoc.DocName
-        Should.equal (Some @"C:\tmp\文档1.docx") withDoc.DocPath
+        // 文档信息与认进程的表分开：GeneralAppInfo 里没有文档字段，文档另立一条
+        let doc = GeneralDocInfo.create (Some "文档1", Some @"C:\tmp\文档1.docx")
+        Report.line output "文档信息" (doc.describe())
+        Should.equal (Some "文档1") doc.Name
+        Should.equal (Some @"C:\tmp\文档1.docx") doc.Path
+        Should.equal "名字=(无) 路径=(无)" (GeneralDocInfo.empty.describe())
 
         for image, ids in before do
             let now = Report.procIds image
             Report.line2 output "进程" image (sprintf "%A → %A" (Set.toList ids) (Set.toList now))
             Should.equal ids now
 
-        Report.conclusion output "通过：四家身份常量都来自专用 Host，过时信息四家入口都拒接、进程名各归各家；文档字段只收数据"
+        Report.conclusion output "通过：四家身份常量都来自专用 Host，过时信息四家入口都拒接、进程名各归各家；文档信息不在认进程的表里"

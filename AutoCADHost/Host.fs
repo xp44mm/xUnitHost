@@ -54,7 +54,7 @@ module Host =
     /// 只附着、不新建、不 Quit、不改应用状态 —— 冷启动分钟级，这里连碰都不会碰新建那条路。
     /// 返回的 AcadApplication 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
     /// 文档级交接检查（换了图纸 / 采集后存过盘等）按用户要求推迟，暂不做；
-    /// info 里的 DocName / DocPath 只是收下的数据，不参与判断。
+    /// 图纸名 / 路径本来就不在 info 里（GeneralDocInfo 单列），认人只看进程身份。
     let GetApplication (info: GeneralAppInfo) : Result<AcadApplication, string> =
         GeneralAppInfo.attach info SelfIdentity.Tag progIds (fun raw ->
             try
