@@ -29,12 +29,11 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
         Should.equal "POWERPNT" PowerPointHost.Host.SelfImage
         Should.equal "acad" AutoCADHost.Host.SelfImage
 
-        let captured = Report.unixMs DateTime.Now
-        let info = GeneralAppInfo.create ("et", 1234, "!WpsVSTO.Instance.1234", "", captured)
+        let info = GeneralAppInfo.create ("et", 1234, "!WpsVSTO.Instance.1234", "")
         Report.line output "第五家参数表" (info.describe())
         Should.equal "et" info.Image
-        // 表里只有「找到这只进程」要用的现场值：没有种类标记、没有显示名
-        Report.line output "字段" "Image / Pid / Rot / ExePath / CapturedMs（没有窗口句柄、没有种类标记）"
+        // 表里只有「找到这只进程」要用的现场值：没有种类标记、没有显示名、没有采集时刻
+        Report.line output "字段" "Image / Pid / Rot / ExePath（没有窗口句柄、没有采集时刻、没有种类标记）"
 
         Report.conclusion output "通过：进程名是 Host 上的一个字符串，库里没有封闭种类、没有标记字段；第五家直接填 image 就能用"
 
@@ -45,8 +44,7 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
         let selfImage = Path.GetFileNameWithoutExtension Environment.ProcessPath
         let name = sprintf "!General.%d" Environment.ProcessId
         let probe = BlackboardProbe()
-        let captured = Report.unixMs DateTime.Now
-        let info = GeneralAppInfo.create (selfImage, Environment.ProcessId, name, "", captured)
+        let info = GeneralAppInfo.create (selfImage, Environment.ProcessId, name, "")
 
         Report.line output "参数表" (info.describe())
         Report.line output "获取函数" "acquire = Com.runningAt info.Rot；work = 取回对象的类型名"
@@ -92,7 +90,6 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
     member this.``通用参数表 四家 Host 各用自己的 SelfImage，过时信息一律拒接``() =
         Report.title output "通用参数表：四家 Host 各用自己的 SelfImage，过时信息一律拒接"
 
-        let captured = Report.unixMs DateTime.Now
         let images = [ "WINWORD"; "EXCEL"; "POWERPNT"; "acad" ]
         let before = images |> List.map(fun image -> image, Report.procIds image)
 
@@ -107,7 +104,7 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
               (fun i -> AutoCADHost.Host.GetApplication i |> Result.map(fun app -> box app)) ]
 
         for label, image, call in entries do
-            let info = GeneralAppInfo.create (image, 999999, "!self.Instance.999999", "", captured)
+            let info = GeneralAppInfo.create (image, 999999, "!self.Instance.999999", "")
 
             Report.line output label (info.describe())
 

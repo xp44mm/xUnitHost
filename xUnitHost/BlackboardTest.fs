@@ -85,8 +85,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
                 (WordHost.Host.SelfImage,
                  27232,
                  "!WordVSTO.Instance.27232",
-                 @"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE",
-                 word.CapturedMs)
+                 @"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE")
 
         Report.line output "手工填报" (filled.describe())
         Should.equal word filled
@@ -107,11 +106,14 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         Should.equal 6550 acad.Pid
         Should.equal (Some "Drawing1.dwg") (BlackboardText.docOfText acadText).Name
 
-        Report.line output "Word 采集" (Report.clock word.CapturedMs)
-        Should.equal true (word.CapturedMs > 0L)
+        // 采集时间行不进表：把标题里的采集时间抽掉，解析出来的参数表应当一模一样
+        let noClockText = wordText.Replace(" 采集时间 2026-11-07 08:39:53", "")
+        let noClock = BlackboardText.ofText noClockText
+        Report.line output "抽掉采集时间" (sprintf "%A" noClock)
+        Should.equal (Ok word) noClock
 
-        let incomplete = BlackboardText.ofText "KIND : word\nPID : 123"
-        Report.line output "缺采集时间" (sprintf "%A" incomplete)
+        let incomplete = BlackboardText.ofText "KIND : word"
+        Report.line output "缺 PID" (sprintf "%A" incomplete)
         Should.equal true (match incomplete with Error _ -> true | _ -> false)
 
         Report.conclusion output "通过：四家文本由参考实现填成 GeneralAppInfo（只含进程信息），文档另取 GeneralDocInfo；手工填报同一条记录字段完全相同"
@@ -123,11 +125,9 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         let images = [ "WINWORD"; "EXCEL"; "POWERPNT"; "acad" ]
         let before = images |> List.map(fun image -> image, Report.procIds image)
 
-        let captured = Report.unixMs DateTime.Now
-
         let dead =
             GeneralAppInfo.create
-                (WordHost.Host.SelfImage, 999999, "!WordVSTO.Instance.999999", "", captured)
+                (WordHost.Host.SelfImage, 999999, "!WordVSTO.Instance.999999", "")
 
         Report.line output "输入" (dead.describe())
 

@@ -7,7 +7,7 @@
 ///   · 只逐份开/关自己那份工作簿，绝不用 CloseAllWorkbooksWithoutSaving（那会关掉用户开着的表）；
 ///   · 应用级开关（DisplayAlerts / AskToUpdateLinks / AutomationSecurity）临时改、用完恢复原值；
 ///   · **借用进程**：黑板说的是「那只常驻 Excel」，不是「它当时开的哪份工作簿」。
-///     表里本来就只有进程身份（进程名 / PID / ROT / EXE / 采集时间），开/关自己的文件不会断链；
+///     表里本来就只有进程身份（进程名 / PID / ROT / EXE），开/关自己的文件不会断链；
 ///   · 用户开着几本工作簿不归这条通道管，不断言数量；只核自己打开的那一本已关掉、没留垃圾。
 namespace XUnitHost
 
@@ -121,8 +121,8 @@ module private Attached =
 type AttachedConvertTest(output: ITestOutputHelper) =
 
     [<Fact>]
-    member this.``借用进程：只认进程身份，表里没有窗口这一条``() =
-        Report.title output "借用进程：只认 PID/ROT/EXE/启动时刻，窗口句柄早就不在表里"
+    member this.``借用进程：只认进程身份，表里没有窗口和采集时刻``() =
+        Report.title output "借用进程：只认进程名/PID/EXE/ROT 后缀，窗口句柄与采集时刻都不在表里"
 
         let info = Attached.info () |> Report.ok
         let borrowed = Attached.borrow info
@@ -130,12 +130,11 @@ type AttachedConvertTest(output: ITestOutputHelper) =
         let deadPid = { borrowed with Pid = 999999 }
         let wrongRot = { borrowed with Rot = "!ExcelVSTO.Instance.999999" }
         let wrongExe = { borrowed with ExePath = @"C:\nowhere\OTHER.EXE" }
-        let noClock = { borrowed with CapturedMs = 0L }
         let noImage = { borrowed with Image = "" }
 
         Report.line output "黑板原值" (info.describe())
         Report.line output "挂回用表" (borrowed.describe())
-        Report.line output "口径" "窗口句柄不参与判断（字段已删）：只核进程名 / PID 存活 / 启动时刻 / EXE / ROT 后缀"
+        Report.line output "口径" "窗口句柄、采集时刻都不参与判断（字段已删）：只核进程名 / PID 存活 / EXE / ROT 后缀"
 
         let verdict (label: string) (table: GeneralAppInfo) =
             match GeneralAppInfo.verify table with
@@ -146,7 +145,6 @@ type AttachedConvertTest(output: ITestOutputHelper) =
         verdict "PID 不在" deadPid
         verdict "ROT 后缀不符" wrongRot
         verdict "EXE 不符" wrongExe
-        verdict "采集时间缺失" noClock
         verdict "进程名为空" noImage
 
         let isOk table =
@@ -167,11 +165,10 @@ type AttachedConvertTest(output: ITestOutputHelper) =
         Should.equal true (isRefused "已经不在运行" deadPid)
         Should.equal true (isRefused "ROT" wrongRot)
         Should.equal true (if exeReadable then isRefused "EXE" wrongExe else isOk wrongExe)
-        Should.equal true (isRefused "采集时间" noClock)
         Should.equal true (isRefused "Image" noImage)
         Report.line output "EXE 路径" (sprintf "本机可读=%b，判定=%A" exeReadable exeVerdict)
 
-        Report.conclusion output "通过：进程身份五条一条不少，PID/ROT/EXE/采集时间不对就拒接；纯逻辑，不碰真机、不动文件"
+        Report.conclusion output "通过：进程身份四条一条不少，PID/ROT/EXE/进程名不对就拒接；纯逻辑，不碰真机、不动文件"
 
     [<Fact>]
     member this.``常驻 Excel：按参数表挂回，只读核对，一个文件都不动``() =

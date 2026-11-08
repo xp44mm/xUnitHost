@@ -15,11 +15,10 @@ type ExcelGeneralTest(output: ITestOutputHelper) =
     member this.``Excel 通用参数表 GetApplication 过时信息拒接``() =
         Report.title output "Excel 通用参数表 GetApplication：过时信息拒接，不新建"
 
-        let captured = Report.unixMs DateTime.Now
         let rot = "!ExcelVSTO.Instance.999999"
 
         let stale =
-            GeneralAppInfo.create (ExcelHost.Host.SelfImage, 999999, rot, "", captured)
+            GeneralAppInfo.create (ExcelHost.Host.SelfImage, 999999, rot, "")
 
         Report.line output "入口进程名" ExcelHost.Host.SelfImage
         Report.line output "过时参数表" (stale.describe())
@@ -50,8 +49,7 @@ type ExcelGeneralTest(output: ITestOutputHelper) =
 
         let selfImage = Path.GetFileNameWithoutExtension Environment.ProcessPath
         let rot = sprintf "!General.%d" Environment.ProcessId
-        let captured = Report.unixMs DateTime.Now
-        let info = GeneralAppInfo.create (selfImage, Environment.ProcessId, rot, "", captured)
+        let info = GeneralAppInfo.create (selfImage, Environment.ProcessId, rot, "")
         let probe = BlackboardProbe()
 
         Report.line output "参数表" (info.describe())

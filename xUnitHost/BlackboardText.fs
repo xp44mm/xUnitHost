@@ -3,15 +3,14 @@
 /// 生产库 OsHost 只认 GeneralAppInfo 那张参数表：调用方（插件 / 宿主程序）按字段填报，
 /// 库不认文本、不解析排版。插件改了标题、键名、措辞，只改这一份参考代码，不动库。
 /// 用不上文本源的程序请直接填参数表，进程名取各家专用 Host 的 SelfImage：
-///   GeneralAppInfo.create (WordHost.Host.SelfImage, 27232, "!WordVSTO.Instance.27232", winwordExe, captured)
+///   GeneralAppInfo.create (WordHost.Host.SelfImage, 27232, "!WordVSTO.Instance.27232", winwordExe)
 /// 文档名 / 路径不在这张表里：要就用 docOfText 另取一条 GeneralDocInfo（只作报告数据）。
-/// 文本里的 HWND 行不解析：窗口句柄不属于「这是哪只进程」，表里也没有这个字段了。
+/// 文本里的 HWND 行、采集时间行都不解析：窗口与抄录时刻不属于「这是哪只进程」，表里也没有这两个字段。
 /// 解析出来的字段与手工填报的字段完全相同，四家 GetApplication(info) 分不出来源。
 namespace XUnitHost
 
 open System
 open System.Globalization
-open System.Text.RegularExpressions
 open OsHost
 
 module internal BlackboardText =
@@ -44,24 +43,6 @@ module internal BlackboardText =
             else
                 None)
         |> Option.defaultValue ""
-
-    let private parseClock (text: string) : int64 option =
-        let hit =
-            Regex.Match(text, @"采集时间\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})")
-
-        if not hit.Success then
-            None
-        else
-            match
-                DateTime.TryParseExact(
-                    hit.Groups.[1].Value,
-                    "yyyy-MM-dd HH:mm:ss",
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.None
-                )
-            with
-            | true, moment -> Some(Clock.unixMs moment)
-            | _ -> None
 
     /// 认出是哪一家 → 取那家专用 Host 上的进程名（现在表里只有进程名，没有种类标记）。
     let private imageOfLine (lines: string array) : string option =
@@ -125,8 +106,8 @@ module internal BlackboardText =
             GeneralDocInfo.create (docName lines, docPath lines)
 
     /// 参考解析：插件剪贴板原文 / 会话里贴的一段 / 存下来的 txt → GeneralAppInfo 参数表。
-    /// 只填认进程的字段；文档名 / 路径走 docOfText。
-    /// 缺 PID / 采集时间 / 认不出种类，一律 Error —— 信息不完整就不该往下走。
+    /// 只填认进程的字段；文档名 / 路径走 docOfText；采集时间行不解析（不是进程的属性）。
+    /// 缺 PID / 认不出哪一家，一律 Error —— 信息不完整就不该往下走。
     /// 注意这里只是「把展示文本填成参数表」，真正的现场校验在 OsHost.GeneralAppInfo.verify；
     /// 文档级交接检查按用户要求推迟（2026-11-07 13:51），暂不做。
     let ofText (text: string) : Result<GeneralAppInfo, string> =
@@ -148,20 +129,15 @@ module internal BlackboardText =
                     | _ -> 0
                 | None -> 0
 
-            let capturedMs = parseClock text |> Option.defaultValue 0L
-
             if image.IsNone then
                 Error "认不出是哪一家 COM：黑板信息里既没有插件名，也没有 KIND 行"
             elif pid <= 0 then
                 Error "黑板信息里没有有效 PID：不猜、不新建"
-            elif capturedMs <= 0L then
-                Error "黑板信息里没有有效采集时间：无法判断信息是否过时"
             else
                 Ok(
                     GeneralAppInfo.create
                         (image.Value,
                          pid,
                          valueOf "ROT" lines |> Option.defaultValue "",
-                         exeLine lines,
-                         capturedMs)
+                         exeLine lines)
                 )
