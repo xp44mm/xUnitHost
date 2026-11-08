@@ -3,27 +3,27 @@
 /// 旧路 `AppInfo` 把「种类」钉在封闭枚举 `AppKind` 上，由枚举派生进程名与显示名；
 /// 2026-11-07 14:11 按用户决定把 `OsHost/AppInfo.fs` 整份删除。
 /// 2026-11-08 又按用户决定删掉 `GeneralIdentity`：认种类、显示名、种类标记一律不要，
-/// 表里只留现场值 —— Image（进程名）+ PID + ROT 名 + HWND + EXE + 采集时刻，
+/// 表里只留现场值 —— Image（进程名）+ PID + ROT 名 + EXE + 采集时刻，
 /// 够把那只进程认出来就行，别再往上叠概念。
+/// 2026-11-09 删掉 HWND：插件抄的是「它当时打开的文档窗口」，借用进程后必然换，
+/// 拿它当凭据只会断链；`borrowProcess` 于是成了空操作，一并撤掉。
 /// 「怎么拿到现成对象」「拿到 obj 之后怎么转强类型、核身份」用**获取函数**占位：
 /// attachWith 的 acquire / work 两个参数，库一行 Office 类型都不认，也绝不新建实例。
 /// 于是第五家、第十家不用改库。
-/// 现场校验口径（进程 / 启动时间 / HWND / EXE / ROT 后缀）不变；文档级交接检查按用户要求推迟。
+/// 现场校验口径（进程 / 启动时间 / EXE / ROT 后缀）；文档级交接检查按用户要求推迟。
 namespace OsHost
 
 open System
 open System.Globalization
 
 /// 通用参数表：**只装找到那只进程所需的值**。没有种类枚举、没有显示名、没有种类标记、
-/// 没有 COM 类型、没有文档 —— 文档信息另立 GeneralDocInfo，只当报告数据。
+/// 没有窗口句柄、没有 COM 类型、没有文档 —— 文档信息另立 GeneralDocInfo，只当报告数据。
 type GeneralAppInfo =
     { /// 进程名（Proc.ids 用的 image，不带 .exe），例如 "WINWORD" / "EXCEL" / "acad"
       Image: string
       Pid: int
       /// ROT 注册名；空串时按调用方给的 ProgID 列表找
       Rot: string
-      /// 窗口句柄；0n = 借用进程，不校验窗口
-      Hwnd: nativeint
       ExePath: string
       /// 采集时刻（Unix 毫秒）：所有「过没过时」的判断都拿它当基准
       CapturedMs: int64 }
@@ -34,7 +34,6 @@ type GeneralAppInfo =
             image: string,
             pid: int,
             rot: string,
-            hwnd: nativeint,
             exePath: string,
             capturedMs: int64
         )
@@ -42,18 +41,17 @@ type GeneralAppInfo =
         { Image = image
           Pid = pid
           Rot = rot
-          Hwnd = hwnd
           ExePath = exePath
           CapturedMs = capturedMs }
 
     /// 一行摘要，贴报告 / 报错用
     member this.describe () : string =
         sprintf
-            "%s pid=%d rot=%s hwnd=%A 采集=%s"
+            "%s pid=%d rot=%s exe=%s 采集=%s"
             (if String.IsNullOrWhiteSpace this.Image then "(没有进程名)" else this.Image)
             this.Pid
             (if String.IsNullOrWhiteSpace this.Rot then "-" else this.Rot)
-            this.Hwnd
+            (if String.IsNullOrWhiteSpace this.ExePath then "-" else this.ExePath)
             (Clock.show this.CapturedMs)
 
 /// 文档信息：插件抄下来的「当前文档名 / 落盘路径」。
@@ -85,29 +83,14 @@ module GeneralAppInfo =
     let private firstError (checks: (bool * string) list) : string option =
         checks |> List.tryPick(fun (isBad, message) -> if isBad then Some message else None)
 
-    /// 借用进程：只认进程身份，不认别人文档窗口的句柄。
-    /// HWND 是插件抄下来的「调用方当前打开的文档窗口」，借用方打开 / 关闭自己的文件后
-    /// 它必然被换掉（甚至那个窗口整个关掉），拿它当交接凭据会让下一轮凭空断链。
-    /// 这里把 Hwnd 置 0n —— verify 本来就把它定义为「没填这一项，就不校验窗口」；
-    /// PID 存活 / 采集时间 / 启动时刻 / EXE / ROT 名后缀一条不少。
-    /// 调用方仍可保留原表里的 HWND 数值作数据（报告、日志用），只是不交给入口判断。
-    let borrowProcess (info: GeneralAppInfo) : GeneralAppInfo =
-        { info with Hwnd = 0n }
-
-    /// 附着之前的「不过时」核对：进程名 / PID / 启动时刻 / HWND / EXE / ROT 后缀，一样不落地比。
-    /// HWND 是**可选**凭据：Hwnd = 0n 表示借用进程、不校验窗口（见 borrowProcess）。
+    /// 附着之前的「不过时」核对：进程名 / PID 存活 / 启动时刻 / EXE / ROT 后缀，一样不落地比。
+    /// 不核窗口：窗口句柄属于「谁当时打开了什么文档」，不属于「这是哪只进程」。
     /// 任何一条不通过就拒接，绝不改用 GetActiveObject 猜。
     let verify (info: GeneralAppInfo) : Result<unit, string> =
         let image = info.Image
         let alive = Proc.ids image |> Set.contains info.Pid
         let started = Proc.startedMs info.Pid
         let exe = Proc.exePath info.Pid
-
-        let hwndPid =
-            if info.Hwnd = 0n then
-                None
-            else
-                Win32.pidOfWindow(Win32.root info.Hwnd)
 
         let rotPid =
             let dot = info.Rot.LastIndexOf '.'
@@ -138,10 +121,6 @@ module GeneralAppInfo =
                  | Some ms -> ms > info.CapturedMs + 2000L
                  | None -> false),
                 sprintf "PID %d 在采集之后才启动（进程号被复用）：黑板信息已过时" info.Pid )
-              ( (match hwndPid with
-                 | Some number -> number <> info.Pid
-                 | None -> info.Hwnd <> 0n),
-                sprintf "HWND %A 已不属于 PID %d（窗口关过或换了）：黑板信息已过时" info.Hwnd info.Pid )
               ( not (String.IsNullOrWhiteSpace info.ExePath)
                 && (match exe with
                     | Some path -> not (String.Equals(path, info.ExePath, StringComparison.OrdinalIgnoreCase))
@@ -161,6 +140,7 @@ module GeneralAppInfo =
     /// 2026-11-08 起文档信息整块搬出本表（GeneralDocInfo）：认进程的表里不再有文档字段。
     /// 同一天按用户决定撤掉 `ensureTag`：表里没有种类标记，进错入口的代价是 work 里强转失败
     /// 或 pid 核对不符 —— 一样是明确 Error，不必为此多留一个字段。
+    /// 2026-11-09 撤掉 `borrowProcess` 与 HWND 校验：字段没了，清零也就没意义。
 
     /// 默认获取函数：按 ROT 名精确取；没填 ROT 名就按调用方给的 ProgID 列表找。
     /// 必须在 Sta.run 那条固定 STA 线程上被调用（attachWith 已保证）。

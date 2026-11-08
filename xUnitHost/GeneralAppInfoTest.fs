@@ -30,11 +30,11 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
         Should.equal "acad" AutoCADHost.Host.SelfImage
 
         let captured = Report.unixMs DateTime.Now
-        let info = GeneralAppInfo.create ("et", 1234, "!WpsVSTO.Instance.1234", 0n, "", captured)
+        let info = GeneralAppInfo.create ("et", 1234, "!WpsVSTO.Instance.1234", "", captured)
         Report.line output "第五家参数表" (info.describe())
         Should.equal "et" info.Image
         // 表里只有「找到这只进程」要用的现场值：没有种类标记、没有显示名
-        Report.line output "字段" "Image / Pid / Rot / Hwnd / ExePath / CapturedMs"
+        Report.line output "字段" "Image / Pid / Rot / ExePath / CapturedMs（没有窗口句柄、没有种类标记）"
 
         Report.conclusion output "通过：进程名是 Host 上的一个字符串，库里没有封闭种类、没有标记字段；第五家直接填 image 就能用"
 
@@ -46,7 +46,7 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
         let name = sprintf "!General.%d" Environment.ProcessId
         let probe = BlackboardProbe()
         let captured = Report.unixMs DateTime.Now
-        let info = GeneralAppInfo.create (selfImage, Environment.ProcessId, name, 0n, "", captured)
+        let info = GeneralAppInfo.create (selfImage, Environment.ProcessId, name, "", captured)
 
         Report.line output "参数表" (info.describe())
         Report.line output "获取函数" "acquire = Com.runningAt info.Rot；work = 取回对象的类型名"
@@ -107,7 +107,7 @@ type GeneralAppInfoTest(output: ITestOutputHelper) =
               (fun i -> AutoCADHost.Host.GetApplication i |> Result.map(fun app -> box app)) ]
 
         for label, image, call in entries do
-            let info = GeneralAppInfo.create (image, 999999, "!self.Instance.999999", 0n, "", captured)
+            let info = GeneralAppInfo.create (image, 999999, "!self.Instance.999999", "", captured)
 
             Report.line output label (info.describe())
 

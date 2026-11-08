@@ -76,7 +76,6 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
         Should.equal WordHost.Host.SelfImage word.Image
         Should.equal 27232 word.Pid
         Should.equal "!WordVSTO.Instance.27232" word.Rot
-        Should.equal (nativeint 0x002304FA) word.Hwnd
         Should.equal (Some "文档1") wordDoc.Name
         Should.equal None wordDoc.Path
 
@@ -86,7 +85,6 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
                 (WordHost.Host.SelfImage,
                  27232,
                  "!WordVSTO.Instance.27232",
-                 (nativeint 0x002304FA),
                  @"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE",
                  word.CapturedMs)
 
@@ -129,7 +127,7 @@ ACAD.EXE : C:\\Program Files\\Autodesk\\AutoCAD 2020\\acad.exe
 
         let dead =
             GeneralAppInfo.create
-                (WordHost.Host.SelfImage, 999999, "!WordVSTO.Instance.999999", 0n, "", captured)
+                (WordHost.Host.SelfImage, 999999, "!WordVSTO.Instance.999999", "", captured)
 
         Report.line output "输入" (dead.describe())
 

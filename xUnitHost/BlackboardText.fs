@@ -3,8 +3,9 @@
 /// 生产库 OsHost 只认 GeneralAppInfo 那张参数表：调用方（插件 / 宿主程序）按字段填报，
 /// 库不认文本、不解析排版。插件改了标题、键名、措辞，只改这一份参考代码，不动库。
 /// 用不上文本源的程序请直接填参数表，进程名取各家专用 Host 的 SelfImage：
-///   GeneralAppInfo.create (WordHost.Host.SelfImage, 27232, "!WordVSTO.Instance.27232", 0n, "", captured)
+///   GeneralAppInfo.create (WordHost.Host.SelfImage, 27232, "!WordVSTO.Instance.27232", winwordExe, captured)
 /// 文档名 / 路径不在这张表里：要就用 docOfText 另取一条 GeneralDocInfo（只作报告数据）。
+/// 文本里的 HWND 行不解析：窗口句柄不属于「这是哪只进程」，表里也没有这个字段了。
 /// 解析出来的字段与手工填报的字段完全相同，四家 GetApplication(info) 分不出来源。
 namespace XUnitHost
 
@@ -43,20 +44,6 @@ module internal BlackboardText =
             else
                 None)
         |> Option.defaultValue ""
-
-    let private parseHwnd (raw: string) : nativeint =
-        let text = raw.Trim()
-
-        if String.IsNullOrWhiteSpace text then
-            0n
-        elif text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) then
-            match UInt32.TryParse(text.Substring 2, NumberStyles.HexNumber, CultureInfo.InvariantCulture) with
-            | true, value -> nativeint (int64 value)
-            | _ -> 0n
-        else
-            match Int64.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture) with
-            | true, value -> nativeint value
-            | _ -> 0n
 
     let private parseClock (text: string) : int64 option =
         let hit =
@@ -175,7 +162,6 @@ module internal BlackboardText =
                         (image.Value,
                          pid,
                          valueOf "ROT" lines |> Option.defaultValue "",
-                         valueOf "HWND" lines |> Option.map parseHwnd |> Option.defaultValue 0n,
                          exeLine lines,
                          capturedMs)
                 )

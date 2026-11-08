@@ -6,9 +6,8 @@
 ///   · 所有 COM 读写都包在 OsHost.Sta.run 那条固定 STA 线程上（与附着同公寓）；
 ///   · 只逐份开/关自己那份工作簿，绝不用 CloseAllWorkbooksWithoutSaving（那会关掉用户开着的表）；
 ///   · 应用级开关（DisplayAlerts / AskToUpdateLinks / AutomationSecurity）临时改、用完恢复原值；
-///   · **借用进程**：黑板上的 HWND 是用户当前工作簿的窗口，不是本轮要打开的那份 .xls 的窗口。
-///     开/关文件后它必然换，拿它当交接凭据会让下一轮断链 —— 把它从校验里摘掉，
-///     进程身份照核（PID 存活 / 采集时间 / 启动时刻 / EXE / ROT 名后缀 pid）；
+///   · **借用进程**：黑板说的是「那只常驻 Excel」，不是「它当时开的哪份工作簿」。
+///     表里本来就只有进程身份（进程名 / PID / ROT / EXE / 采集时间），开/关自己的文件不会断链；
 ///   · 用户开着几本工作簿不归这条通道管，不断言数量；只核自己打开的那一本已关掉、没留垃圾。
 namespace XUnitHost
 
@@ -38,9 +37,9 @@ module private Attached =
 
     type App = Microsoft.Office.Interop.Excel.Application
 
-    /// 借用进程用 OsHost 的正式入口：只摘掉 HWND 这一条校验，进程身份照核。
-    /// 黑板原文里的 HWND 仍留在 info 里当数据，报告照实打印。
-    let borrow (info: GeneralAppInfo) : GeneralAppInfo = GeneralAppInfo.borrowProcess info
+    /// 借用那只常驻进程：表里已经没有窗口句柄这类「谁当时开着什么」的字段，
+    /// 参数表原样交给 GetApplication 即可。
+    let borrow (info: GeneralAppInfo) : GeneralAppInfo = info
 
     /// 弹窗兜底：意外的对话框躲不完（修复、共享工作簿、打印机、加载项……），
     /// 与其一个个去压，不如让窗口露出来——哪一步卡住就把常驻 Excel 切到前台，
@@ -122,14 +121,12 @@ module private Attached =
 type AttachedConvertTest(output: ITestOutputHelper) =
 
     [<Fact>]
-    member this.``借用进程：别的文件窗口 HWND 不校验，进程身份一条不少``() =
-        Report.title output "借用进程：只认 PID/ROT/EXE/启动时刻，别人窗口的 HWND 不校验"
+    member this.``借用进程：只认进程身份，表里没有窗口这一条``() =
+        Report.title output "借用进程：只认 PID/ROT/EXE/启动时刻，窗口句柄早就不在表里"
 
         let info = Attached.info () |> Report.ok
         let borrowed = Attached.borrow info
 
-        // 旧口径的反证：把窗口句柄换成一个完全不相干的，verify 会拒接 —— 上次翻倍法就是这样断链的。
-        let alienWindow = { info with Hwnd = nativeint 0x00ABCDEF }
         let deadPid = { borrowed with Pid = 999999 }
         let wrongRot = { borrowed with Rot = "!ExcelVSTO.Instance.999999" }
         let wrongExe = { borrowed with ExePath = @"C:\nowhere\OTHER.EXE" }
@@ -138,15 +135,14 @@ type AttachedConvertTest(output: ITestOutputHelper) =
 
         Report.line output "黑板原值" (info.describe())
         Report.line output "挂回用表" (borrowed.describe())
-        Report.line output "口径" "HWND 属于用户当前工作簿的窗口，开/关自己的文件后必换；挂回用表置 0n 摘掉这一条"
+        Report.line output "口径" "窗口句柄不参与判断（字段已删）：只核进程名 / PID 存活 / 启动时刻 / EXE / ROT 后缀"
 
         let verdict (label: string) (table: GeneralAppInfo) =
             match GeneralAppInfo.verify table with
             | Ok() -> Report.line output label "放行"
             | Error message -> Report.line output label ("拒接：" + message)
 
-        verdict "别的窗口" alienWindow
-        verdict "借用进程表" borrowed
+        verdict "挂回用表" borrowed
         verdict "PID 不在" deadPid
         verdict "ROT 后缀不符" wrongRot
         verdict "EXE 不符" wrongExe
@@ -167,7 +163,6 @@ type AttachedConvertTest(output: ITestOutputHelper) =
         let exeReadable = (Proc.exePath borrowed.Pid).IsSome
         let exeVerdict = GeneralAppInfo.verify wrongExe
 
-        Should.equal true (isRefused "HWND" alienWindow)
         Should.equal true (isOk borrowed)
         Should.equal true (isRefused "已经不在运行" deadPid)
         Should.equal true (isRefused "ROT" wrongRot)
@@ -175,13 +170,8 @@ type AttachedConvertTest(output: ITestOutputHelper) =
         Should.equal true (isRefused "采集时间" noClock)
         Should.equal true (isRefused "Image" noImage)
         Report.line output "EXE 路径" (sprintf "本机可读=%b，判定=%A" exeReadable exeVerdict)
-        Should.equal 0n borrowed.Hwnd
-        Should.equal info.Pid borrowed.Pid
-        Should.equal info.Rot borrowed.Rot
-        Should.equal info.ExePath borrowed.ExePath
-        Should.equal info.CapturedMs borrowed.CapturedMs
 
-        Report.conclusion output "通过：HWND 摘掉后放行，PID/ROT/EXE/采集时间不对仍拒接；纯逻辑，不碰真机、不动文件"
+        Report.conclusion output "通过：进程身份五条一条不少，PID/ROT/EXE/采集时间不对就拒接；纯逻辑，不碰真机、不动文件"
 
     [<Fact>]
     member this.``常驻 Excel：按参数表挂回，只读核对，一个文件都不动``() =
@@ -192,7 +182,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
         Report.title output "常驻 Excel：黑板参数表 → GetApplication 挂回（只读）"
         Report.line output "参数表" (info.describe())
         Report.line output "文档" (doc.describe())
-        Report.line output "交接" (sprintf "借用进程，HWND %A 只作数据、不校验；挂回用表 %s" info.Hwnd (borrowed.describe()))
+        Report.line output "交接" (sprintf "借用那只常驻进程，表里只有进程身份；挂回用表 %s" (borrowed.describe()))
         Report.line output "现场" (sprintf "%s 进程 %A" info.Image (Set.toList before))
 
         let attached = ExcelHost.Host.GetApplication borrowed
@@ -256,7 +246,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
 
             Report.title output "常驻 Excel：挂回式升级 .xls，核对通过才把原件送回收站"
             Report.line output "参数表" (info.describe())
-            Report.line output "交接" (sprintf "借用进程，HWND %A 只作数据、不校验；挂回用表 %s" info.Hwnd (borrowed.describe()))
+            Report.line output "交接" (sprintf "借用那只常驻进程，表里只有进程身份；挂回用表 %s" (borrowed.describe()))
             Report.line output "本轮" (sprintf "%d 份 .xls（默认 1 张，XUNITHOST_CONVERT_LIMIT 可放大）" items.Length)
             Report.line output "备份目录" backup
 
@@ -552,7 +542,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
 
             Report.title output "常驻 Excel：逐份升级，成功一份送走一份"
             Report.line output "参数表" (info.describe())
-            Report.line output "交接" (sprintf "借用进程，HWND %A 只作数据、不校验；挂回用表 %s" info.Hwnd (borrowed.describe()))
+            Report.line output "交接" (sprintf "借用那只常驻进程，表里只有进程身份；挂回用表 %s" (borrowed.describe()))
             Report.line output "本轮" (sprintf "%d 份 .xls（%s）" queue.Length (RealFolder.limitLabel ()))
             Report.line output "备份目录" backup
             Report.line output "进度日志" progressFile
