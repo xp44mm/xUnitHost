@@ -32,11 +32,12 @@
 
 ## 黑板模式
 - 插件（WordVSTO / ExcelVSTO）把当前实例抄到黑板（采集时间 / PID / ROT 名 `!ExcelVSTO.Instance.<pid>` / HWND / EXE / 文档）；本侧只按 info 挂回那一只实例读写，**不创建不销毁**。
-- `OsHost/GeneralAppInfo.fs`：`GeneralAppInfo`（`Image`/`Pid`/`Rot`/`Hwnd`/`ExePath`/`CapturedMs`；`create`/`describe`/`verify`/`defaultAcquire`/`attachWith`/`attach`/**`borrowProcess`**）+ `GeneralDocInfo`（只作报告数据）；库不认 Office 类型、不解析文本、不新建不 Quit。`OsHost.Com.runningAt` 按 moniker 名取 ROT（不枚举、不退回 GetActiveObject、不新建）。
+- `OsHost/GeneralAppInfo.fs`：`GeneralAppInfo`（`Image`/`Pid`/`Rot`/`ExePath`/`CapturedMs`；`create`/`describe`/`verify`/`defaultAcquire`/`attachWith`/`attach`）+ `GeneralDocInfo`（只作报告数据）；库不认 Office 类型、不解析文本、不新建不 Quit。`OsHost.Com.runningAt` 按 moniker 名取 ROT（不枚举、不退回 GetActiveObject、不新建）。
 - 四家 `Host.SelfImage`（Word `WINWORD`、Excel `EXCEL`、PPT `POWERPNT`、CAD `acad`）+ `Host.GetApplication(info)` 走 `GeneralAppInfo.attach`（强转 + pid 核对），失败一律 Error，绝不新建/Quit/改显示开关。
 - **`GeneralIdentity` 已整份删除**（11-08，`b567007`）：用户口径「只用来识别进程」→ 表里只留找到进程所需的现场值，`Name`（显示名）/ `Tag`（种类标记）与 `ensureTag` 一起撤掉；进错入口改由 work 强转失败或 pid 不符兜住（也是明确 Error）。
 - **文档级交接检查已取消**（13:51）：`checkDoc` 两路都删，`DocName`/`DocPath` 只收数据不参与判断。
-- **`GeneralAppInfo` 只装认进程的字段**（11-08，`0dba505`）：`Identity/Pid/Rot/Hwnd/ExePath/CapturedMs`；文档名/路径搬进同文件的新记录 `GeneralDocInfo`（`Name`/`Path`/`create`/`empty`/`describe`），纯报告数据。文本源用 `BlackboardText.docOfText` 另取。
+- **`GeneralAppInfo` 只装认进程的字段**（11-08，`0dba505`）：文档名/路径搬进同文件的新记录 `GeneralDocInfo`（`Name`/`Path`/`create`/`empty`/`describe`），纯报告数据。文本源用 `BlackboardText.docOfText` 另取。
+- **`Hwnd` 与 `borrowProcess` 已删**（11-09，`00cb85a`）：窗口句柄属「谁当时开了什么」，借用进程后必换，留着是摆设 → 表里与 `verify` 里都撤掉；`verify` 现在只比 进程名 / PID 存活 / 启动时刻 / EXE / ROT 后缀。文本里的 `HWND` 行不再解析。`Attached.borrow` 变成恒等函数（保留调用点，名字仍表「借用那只常驻进程」）。
 - 旧 `AppInfo.fs`（`AppKind`）已 Obsolete 后整份删除，旧实现在 `19d7d0c` 之前；`GeneralBridge` 与旧对照 Fact 已删。
 
 ## 测试风格
