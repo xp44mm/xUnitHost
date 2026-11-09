@@ -201,30 +201,94 @@ module Application =
         | Error message -> Task.FromException<AcadApplication>(InvalidOperationException(message) :> exn)
         | Ok() -> Sta.runAsync(fun () -> findOnSta pid |> Result.map fst |> unwrap)
 
-    /// 「把动作送进 AutoCAD」的入口：pid + 一段动作 → 一个 Task。
-    /// 与 GetApplicationAsync 不同：这个 Task 要等「挂回 → 订阅 ready 通知 → 每一动作都等到
-    /// AutoCAD 的完成信号 → 退订」全做完才完成，调用方 await 到才算结束。
-    ///
-    /// 动作通过 gate.SubmitAsync 逐步提交：每一步是一个独立 Task，AutoCAD 通知 ready 之前
-    /// 不会发下一步 —— 正是「打开一个 dwg 后 task.completed() 才能继续」的形状。
-    /// 也可以整段只 SubmitAsync 一次，那就是「打开命令和后续动作打包成一个动作、算一个 task」。
-    /// 订阅挂在 AutoCAD 的 COM 事件（EndOpen / NewDrawing / EndCommand / EndModal）上，
-    /// 放行还看 AcadState.IsQuiescent 连中 + 静置；不用 Busy.retry 去撞 RPC_E_CALL_REJECTED。
-    /// 失败一律是 faulted Task（await 抛异常），不包 Result。
-    let executeAsync (pid: int) (action: Ready.Gate -> AcadApplication -> Task<'T>) : Task<'T> =
-        task {
-            let! app = GetApplicationAsync pid
-            use gate = Ready.subscribe app
-            return! action gate app
-        }
+    /// 本机只开着一只 acad 时，替调用方把 PID 定下来。多一只都拒绝，
+    /// 免得「抓到第一只就当是它」；显式指定走下面的 executeAtPidAsync。
+    let private currentAcadPid () : Result<int, string> =
+        let ids = Proc.ids Host.SelfImage
 
-    /// 只提交一次的简写：整段动作写在一个同步 lambda 里，对外仍是一个 Task，
-    /// 内部先等 ready、跑完再等 ready；完成时刻由 AutoCAD 的通知决定，不是 COM 返回。
-    /// 注意：**只保证动作前后有握手，动作内部连续多条 COM 调用之间没有** ——
-    /// Documents.Add() 后紧跟 AddCircle 这类多步写操作仍会撞忙，那种要用
-    /// executeAsync + gate.SubmitAsync 拆成多步。本入口适合单条命令或一串只读。
-    let executeOnceAsync (pid: int) (action: AcadApplication -> 'T) : Task<'T> =
-        executeAsync pid (fun gate _ -> gate.SubmitAsync action)
+        match Set.count ids with
+        | 0 -> Error(sprintf "本机没有正在运行的 %s 进程：拒绝挂回，绝不新建" Host.SelfImage)
+        | 1 ->
+            let pid = Set.minElement ids
+            checkPid pid |> Result.map (fun () -> pid)
+        | n ->
+            Error(
+                sprintf
+                    "本机有 %d 只 %s 在跑，不给 PID 就认不准：请用 executeAtPidAsync 显式指定"
+                    n
+                    Host.SelfImage
+            )
+
+    /// 完成信号驱动的公共实现：一个 TaskCompletionSource 就是全部状态机。
+    ///   · 订阅（连接点）、发动作、退订都在**固定 STA 线程**上，与挂回同公寓；等通知不占 STA。
+    ///   · AutoCAD 推来完成通知 → tcs.SetResult(()) → RanToCompletion，Task 此刻才算完。
+    ///   · 挂回失败 / 连接点没挂上 / 动作抛错 / 等通知超时 → tcs.SetException(ex) → Faulted，
+    ///     await 抛异常，结果槽无效；不用 Result 再包一层。
+    ///   · 无论走哪条路，finally 都退订，不在用户实例上留连接点。
+    /// 关键口径：**action 返回不等于动作做完**（SendCommand / Documents.Add 都返回得很早），
+    /// 只有 AutoCAD 自己通知「这一步结束了」，这个 Task 才收口。
+    let private executeCoreAsync
+        (pid: Result<int, string>)
+        (timeoutMs: int)
+        (action: AcadApplication -> unit)
+        : Task<unit> =
+
+        let tcs =
+            TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+        let driver =
+            task {
+                let mutable gate: Ready.Gate option = None
+
+                try
+                    try
+                        match pid with
+                        | Error message ->
+                            tcs.TrySetException(InvalidOperationException(message) :> exn) |> ignore
+                        | Ok targetPid ->
+                            let! app = GetApplicationAsync targetPid
+
+                            // 订阅在动作之前挂好，动作一发出就有连接点接住通知
+                            let subscription = Ready.subscribe app
+                            gate <- Some subscription
+
+                            if List.isEmpty subscription.Subscriptions then
+                                tcs.TrySetException(
+                                    InvalidOperationException(
+                                        "AutoCAD 的完成事件一条都没挂上（连接点被拒）：不假装完成"
+                                    )
+                                    :> exn
+                                )
+                                |> ignore
+                            else
+                                // 基线取在动作之前：动作执行期间就送达的通知也算，不漏这一条
+                                let baseline = subscription.Notices.Length
+                                do! Sta.runAsync(fun () -> action app)
+                                let! _ = subscription.WaitSignalSinceAsync(baseline, timeoutMs)
+                                tcs.TrySetResult(()) |> ignore
+                    with ex ->
+                        tcs.TrySetException ex |> ignore
+                finally
+                    match gate with
+                    | Some subscription -> (subscription :> IDisposable).Dispose()
+                    | None -> ()
+            }
+
+        // 驱动是即发即忘的：所有异常都在上面接进 tcs，Task 的完成时刻只看 AutoCAD 的通知。
+        driver |> ignore
+        tcs.Task
+
+    /// 「把动作送进 AutoCAD」的入口（按伪代码形状）：一段动作 + 一个完成信号 → 一个 Task。
+    /// 调用方 await 到，才说明 AutoCAD 那边真的把这一步做完了；不靠 Busy.retry 撞忙、不靠固定延迟。
+    /// 本机恰好一只 acad 时不必给 PID；多实例请用 executeAtPidAsync。
+    /// 失败一律是 faulted Task（await 抛异常），不包 Result。
+    let executeAsync (action: AcadApplication -> unit) : Task<unit> =
+        executeCoreAsync (currentAcadPid ()) Ready.SignalTimeoutMs action
+
+    /// 显式 PID + 等通知时限版：多实例机器、负例、要短超时的验证都走这条。
+    /// PID 不合格在挂回前就被拒，连订阅都不会建立。
+    let executeAtPidAsync (pid: int) (timeoutMs: int) (action: AcadApplication -> unit) : Task<unit> =
+        executeCoreAsync (checkPid pid |> Result.map (fun () -> pid)) timeoutMs action
 
     /// 配套的一步到位异步入口：Application + 全部 COM 根对象 + 现场读数。
     /// 挂回与读值都在同一条 STA 线程上做完，免得异步链被同步的 rootsOf 截断。

@@ -19,6 +19,7 @@ namespace AutoCADHost
 
 open System
 open System.Diagnostics
+open System.Threading
 open System.Threading.Tasks
 open Autodesk.AutoCAD.Interop
 open OsHost
@@ -34,6 +35,8 @@ module Ready =
     let StableSamples = 5
     let QuietMs = 1500L
     let PollMs = 200
+    /// 等「一条完成通知」的默认时限；超时是 faulted Task，不无限挂住调用方
+    let SignalTimeoutMs = 30000
 
     /// 纯判定器：不碰 COM，只把「通知 / 采样」喂进来，告诉我们此刻算不算 ready。
     /// 特意抽成公开类型并允许注入时钟，好在不连 AutoCAD 的情况下单测「Task 何时完成」这条规则。
@@ -77,8 +80,14 @@ module Ready =
         let rule = defaultRule ()
         let gate = obj ()
         let mutable disposed = false
+        /// 一次性等待者：WaitSignalSinceAsync 把「下一条通知」接成一个 Task。
+        /// 委托由本对象握着，连接点只记弱引用，不会被 GC 悄悄断掉。
+        let mutable waiters: (string * string -> unit) list = []
 
-        let signal (label: string) (detail: string) = rule.Signal(label, detail)
+        let signal (label: string) (detail: string) =
+            rule.Signal(label, detail)
+            let targets = lock gate (fun () -> let current = waiters in waiters <- []; current)
+            targets |> List.iter(fun deliver -> try deliver (label, detail) with _ -> ())
 
         // 委托必须一直握在手里：连接点只记弱引用，被 GC 掉订阅就悄悄断了。
         let onEndOpen =
@@ -148,6 +157,61 @@ module Ready =
                 }
 
             wait ()
+
+        /// 等到「基线之后」AutoCAD 主动推来的**下一条完成通知**。
+        /// 与 WhenReadyAsync 的区别：这里必须真的收到过通知才算完成，光是 IsQuiescent 静置放行不算；
+        /// 这正是「动作发出去 ≠ 活干完」的判据。基线之后动作执行期间就送达的通知也算，
+        /// 不漏这一条。超时给 faulted Task（await 抛 TimeoutException），不无限挂住调用方。
+        /// 返回 (通知名, 细节)：EndOpen 给文件名、EndCommand 给命令名，其余为空串。
+        member _.WaitSignalSinceAsync(baseline: int, ?timeoutMs: int) : Task<string * string> =
+            let limit = defaultArg timeoutMs SignalTimeoutMs
+
+            let pending =
+                TaskCompletionSource<string * string>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+            let deliver (hit: string * string) = pending.TrySetResult(hit) |> ignore
+
+            let immediate =
+                lock gate (fun () ->
+                    let seen = rule.Notices
+
+                    if seen.Length > baseline then
+                        Some seen.[baseline]
+                    else
+                        waiters <- deliver :: waiters
+                        None)
+
+            match immediate with
+            | Some hit -> Task.FromResult<string * string>(hit)
+            | None ->
+                let cts = new CancellationTokenSource()
+
+                let registration =
+                    cts.Token.Register(fun () ->
+                        pending.TrySetException(
+                            TimeoutException(
+                                sprintf
+                                    "等 AutoCAD 完成通知超时 %dms：订阅 %A；已收到 %A"
+                                    limit
+                                    subscriptions
+                                    rule.Notices
+                            )
+                            :> exn
+                        )
+                        |> ignore)
+
+                cts.CancelAfter limit
+
+                pending.Task.ContinueWith(
+                    fun (_: Task<string * string>) ->
+                        registration.Dispose()
+                        cts.Dispose()
+                        lock gate (fun () ->
+                            waiters <- waiters |> List.filter(fun f -> not (obj.ReferenceEquals(f, deliver))))
+                )
+                |> ignore
+
+                pending.Task
 
         /// 提交一个动作，返回一个 Task。
         /// 关键：动作在 STA 上跑完**不算完** —— 还要等 AutoCAD 的完成通知 + quiescent 稳定，

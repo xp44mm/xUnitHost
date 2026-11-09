@@ -556,20 +556,19 @@ type AcadApplicationTest(output: ITestOutputHelper) =
 
     [<Fact>]
     member this.``Application 模块 就绪订阅入口对非 acad PID 直接 faulted``() =
-        Report.title output "Application 模块：executeAsync 负例不订阅、不排队、不碰真机"
+        Report.title output "Application 模块：完成信号入口负例不订阅、不排队、不碰真机"
 
         let selfPid = Environment.ProcessId
         let images = [ "WINWORD"; "EXCEL"; "POWERPNT"; "acad" ]
         let before = images |> List.map(fun image -> image, Report.procIds image)
 
-        // 挂回在订阅之前：非 acad 的 PID 在 GetApplicationAsync 就被拒，
-        // 连 Ready.subscribe 都不会被调用，更不会往用户实例上挂事件。
-        let work: Task<int> =
-            AutoCADHost.Application.executeAsync selfPid (fun _ _ -> task { return 1 })
+        // 挂回在订阅之前：非 acad 的 PID 在 checkPid 就被拒，连接点根本不会建立。
+        let work: Task<unit> =
+            AutoCADHost.Application.executeAtPidAsync selfPid 30000 (fun _ -> ())
 
         let message =
             try
-                work.GetAwaiter().GetResult() |> ignore
+                work.GetAwaiter().GetResult()
                 "Ok（不该发生）"
             with ex ->
                 ex.GetType().Name + "：" + ex.Message
@@ -581,19 +580,20 @@ type AcadApplicationTest(output: ITestOutputHelper) =
         Should.equal true work.IsFaulted
         Should.equal true (message.Contains "InvalidOperationException" && message.Contains "绝不新建")
 
-        // 简写入口同样如此
-        let once: Task<int> = AutoCADHost.Application.executeOnceAsync selfPid (fun _ -> 1)
+        // PID=0 同样在挂回前被拒，不猜、不新建
+        let zero: Task<unit> =
+            AutoCADHost.Application.executeAtPidAsync 0 30000 (fun _ -> ())
 
-        let onceMessage =
+        let zeroMessage =
             try
-                once.GetAwaiter().GetResult() |> ignore
+                zero.GetAwaiter().GetResult()
                 "Ok（不该发生）"
             with ex ->
                 ex.GetType().Name + "：" + ex.Message
 
-        Report.line output "一次提交" onceMessage
-        Should.equal true once.IsFaulted
-        Should.equal true (onceMessage.Contains "绝不新建")
+        Report.line output "PID=0" zeroMessage
+        Should.equal true zero.IsFaulted
+        Should.equal true (zeroMessage.Contains "PID 必须大于 0")
 
         for image, ids in before do
             let now = Report.procIds image
@@ -602,7 +602,7 @@ type AcadApplicationTest(output: ITestOutputHelper) =
 
         Report.conclusion
             output
-            "通过：非 acad 的 PID 在挂回前就被拒，订阅根本没建立；异常落在 await 上，四家进程一个没起、一个没关"
+            "通过：非 acad 的 PID 与 0 都在挂回前被拒，连接点根本没建立；异常落在 await 上，四家进程一个没起、一个没关"
 
     [<Fact>]
     member this.``在 AutoCAD 里画一个圆``() =
@@ -724,4 +724,91 @@ type AcadApplicationTest(output: ITestOutputHelper) =
                     results.Length
                     okCount
                     rejected.Length)
+        }
+
+    [<Fact>]
+    member this.``Application 模块 完成信号让 executeAsync 的 Task 收口``() =
+        task {
+            Report.title output "Application 模块：executeAsync 的 Task 由 AutoCAD 完成通知收口"
+
+            let before = Report.procIds "acad"
+
+            if before.IsEmpty then
+                Assert.Skip("本机没有开着的 acad，按约定不替用户新起 AutoCAD（要测显式设 XUNITHOST_LAUNCH_ACAD=1）")
+
+            if before.Count <> 1 then
+                Assert.Skip("本机不止一只 acad，executeAsync 不给 PID 会拒接；这条实证请改用 executeAtPidAsync")
+
+            let pid = Set.minElement before
+            let busy (work: unit -> 'T) : 'T = Busy.retry 30000 work
+            let app = AutoCADHost.Application.GetApplicationAsync(pid).GetAwaiter().GetResult()
+
+            let namesBefore = busy (fun () -> [ for d in app.Documents -> d.Name ])
+            Report.line output "现场" (sprintf "acad %d（本来就开着的实例，不新建、不 Quit）" pid)
+            Report.line output "基线" (sprintf "图纸 %A" namesBefore)
+
+            // 对照：空动作立刻返回，但 AutoCAD 没推来任何完成通知 → Task 不能就这么算完
+            let control = AutoCADHost.Application.executeAtPidAsync pid 1500 (fun _ -> ())
+            Report.line output "对照" (sprintf "空动作调用返回时 IsCompleted=%b" control.IsCompleted)
+            Should.equal false control.IsCompleted
+
+            let controlMessage =
+                try
+                    control.GetAwaiter().GetResult()
+                    "Ok（不该发生：没有通知却完成了）"
+                with ex ->
+                    ex.GetType().Name + "：" + ex.Message
+
+            Report.line output "对照" (sprintf "短超时后 %A：%s" control.Status controlMessage)
+
+            try
+                // 正例：Documents.Add() 会推 NewDrawing / EndOpen，Task 等这条通知才 SetResult。
+                // 伪代码里那句「这里从 AcadApplication 等到完成信号」就落在这里。
+                let clock = Stopwatch.StartNew()
+
+                let work =
+                    AutoCADHost.Application.executeAsync(fun a -> a.Documents.Add() |> ignore)
+
+                Report.line output "正例" (sprintf "action 发出瞬间 IsCompleted=%b" work.IsCompleted)
+                do! work
+                clock.Stop()
+
+                Report.line
+                    output
+                    "正例"
+                    (sprintf "Task %A / 等到完成通知耗时 %dms" work.Status clock.ElapsedMilliseconds)
+
+                Should.equal true work.IsCompleted
+                Should.equal TaskStatus.RanToCompletion work.Status
+
+                // 动作真的落地：多出一张临时图，随后只关这一张、不保存
+                let tempName = busy (fun () -> app.ActiveDocument.Name)
+                let docCountAfter = busy (fun () -> app.Documents.Count)
+                Report.line output "读回" (sprintf "临时图 %s / 图纸数 %d" tempName docCountAfter)
+                Should.equal (namesBefore.Length + 1) docCountAfter
+            finally
+                // 无论正例成功还是超时，都只收掉本次新建的那张，绝不碰用户原有的图
+                try
+                    busy (fun () ->
+                        let d = app.ActiveDocument
+
+                        if not (List.contains d.Name namesBefore) then
+                            d.Close(box false, Type.Missing)
+
+                        ())
+                with _ ->
+                    ()
+
+            do! Task.Delay 500
+            let namesAfter = busy (fun () -> [ for d in app.Documents -> d.Name ])
+            Report.line2 output "核对" "图纸" (sprintf "%A → %A" namesBefore namesAfter)
+            Should.equal namesBefore namesAfter
+
+            let now = Report.procIds "acad"
+            Report.line2 output "进程" "acad" (sprintf "%A → %A" (Set.toList before) (Set.toList now))
+            Should.equal before now
+
+            Report.conclusion
+                output
+                "通过：空动作只等来超时；真动作等 AutoCAD 推来完成通知才 RanToCompletion，临时图不保存关掉"
         }
