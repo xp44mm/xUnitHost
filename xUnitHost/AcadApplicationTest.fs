@@ -812,3 +812,171 @@ type AcadApplicationTest(output: ITestOutputHelper) =
                 output
                 "通过：空动作只等来超时；真动作等 AutoCAD 推来完成通知才 RanToCompletion，临时图不保存关掉"
         }
+
+    [<Fact>]
+    member this.``Application 模块 完成信号之后的读取不需要 Task，同步 Sta.run 就够``() =
+        task {
+            Report.title output "Application 模块：完成通知之后的读回，同步 Sta.run 就够，不必异步"
+
+            let before = Report.procIds "acad"
+
+            if before.IsEmpty then
+                Assert.Skip("本机没有开着的 acad，按约定不替用户新起 AutoCAD（要测显式设 XUNITHOST_LAUNCH_ACAD=1）")
+
+            if before.Count <> 1 then
+                Assert.Skip("本机不止一只 acad，executeAsync 不给 PID 会拒接；这条实证请改用 executeAtPidAsync")
+
+            let pid = Set.minElement before
+            let busy (work: unit -> 'T) : 'T = Busy.retry 30000 work
+            let app = AutoCADHost.Application.GetApplicationAsync(pid).GetAwaiter().GetResult()
+
+            // 一次读回四个值：图纸数 / 活动图名 / 版本 / 当前图实体数。纯数据，不写任何东西。
+            let readValues () : int * string * string * int =
+                let count = app.Documents.Count
+                let name = app.ActiveDocument.Name
+                let version = app.Version
+                let entities = app.ActiveDocument.ModelSpace.Count
+                count, name, version, entities
+
+            let field (rows: (string * string) list) (key: string) =
+                rows
+                |> List.tryPick(fun (k, v) -> if k = key then Some v else None)
+                |> Option.defaultValue "-"
+
+            let stableFields (rows: (string * string) list) =
+                [ "版本"; "标题"; "Docs"; "Groups"; "ActiveDoc" ] |> List.map(field rows)
+
+            let namesBefore = busy (fun () -> Sta.run(fun () -> [ for d in app.Documents -> d.Name ]))
+            Report.line output "现场" (sprintf "acad %d / 图纸 %A" pid namesBefore)
+
+            // 对照一：两个现成的「一步读数」入口，同步版与异步版读到的稳定字段是否一致
+            let syncClock = Stopwatch.StartNew()
+
+            let syncRows =
+                match AutoCADHost.Application.describeByPid pid with
+                | Ok rows -> rows
+                | Error message -> failwithf "describeByPid：%s" message
+
+            syncClock.Stop()
+
+            let asyncClock = Stopwatch.StartNew()
+            let! roots = AutoCADHost.Application.GetApplicationWithRootsAsync pid
+            asyncClock.Stop()
+            let asyncRows = AutoCADHost.Application.describe roots
+
+            Report.line
+                output
+                "同步入口"
+                (sprintf
+                    "describeByPid → %d 行 / %dms / %A"
+                    syncRows.Length
+                    syncClock.ElapsedMilliseconds
+                    (stableFields syncRows))
+
+            Report.line
+                output
+                "异步入口"
+                (sprintf
+                    "GetApplicationWithRootsAsync → %d 行 / %dms / %A"
+                    asyncRows.Length
+                    asyncClock.ElapsedMilliseconds
+                    (stableFields asyncRows))
+
+            Should.equal (stableFields syncRows) (stableFields asyncRows)
+
+            // 对照二：完成通知到达之后，同一组值用同步 / 异步 / 裸读各取一次
+            let busyHr (ex: exn) =
+                [ 0x80010001u; 0x8001010Au; 0x80010105u ] |> List.contains(uint32 ex.HResult)
+
+            let rec readStaAsync (attempt: int) : Task<int * string * string * int> =
+                task {
+                    try
+                        return! Sta.runAsync readValues
+                    with ex when attempt < 3 && busyHr ex ->
+                        do! Task.Delay(200 * (attempt + 1))
+                        return! readStaAsync (attempt + 1)
+                }
+
+            let clock = Stopwatch.StartNew()
+            let work = AutoCADHost.Application.executeAsync(fun a -> a.Documents.Add() |> ignore)
+            Report.line output "动作" (sprintf "发出瞬间 IsCompleted=%b" work.IsCompleted)
+            Should.equal false work.IsCompleted
+
+            // 对照三：通知还没到就同步读，读到的是「动作还没做完」的现场（只读，不发新动作）
+            let tooEarly =
+                try
+                    let earlyClock = Stopwatch.StartNew()
+                    let value = Sta.run readValues
+                    earlyClock.Stop()
+                    sprintf "%A / %dms" value earlyClock.ElapsedMilliseconds
+                with ex ->
+                    ex.GetType().Name + "：" + ex.Message
+
+            Report.line output "早读" (sprintf "通知未到就同步读 → %s" tooEarly)
+
+            do! work
+            clock.Stop()
+            Report.line output "完成" (sprintf "Task %A / 等通知 %dms" work.Status clock.ElapsedMilliseconds)
+            Should.equal TaskStatus.RanToCompletion work.Status
+
+            try
+                let syncReadClock = Stopwatch.StartNew()
+                let syncValue = busy (fun () -> Sta.run readValues)
+                syncReadClock.Stop()
+
+                Report.line
+                    output
+                    "同步读"
+                    (sprintf "Sta.run + Busy.retry → %A / %dms" syncValue syncReadClock.ElapsedMilliseconds)
+
+                let (syncCount, _, _, _) = syncValue
+                Should.equal (namesBefore.Length + 1) syncCount
+
+                let asyncReadClock = Stopwatch.StartNew()
+                let! asyncValue = readStaAsync 0
+                asyncReadClock.Stop()
+
+                Report.line
+                    output
+                    "异步读"
+                    (sprintf "Sta.runAsync + let! → %A / %dms" asyncValue asyncReadClock.ElapsedMilliseconds)
+
+                Should.equal syncValue asyncValue
+
+                let bare =
+                    try
+                        let bareClock = Stopwatch.StartNew()
+                        let value = readValues ()
+                        bareClock.Stop()
+                        sprintf "%A / %dms" value bareClock.ElapsedMilliseconds
+                    with ex ->
+                        ex.GetType().Name + "：" + ex.Message
+
+                Report.line output "裸读" (sprintf "不经 Sta，直接读 RCW → %s" bare)
+            finally
+                // 只收掉本次新建的那张，绝不碰用户原有的图
+                try
+                    busy (fun () ->
+                        Sta.run(fun () ->
+                            let d = app.ActiveDocument
+
+                            if not (List.contains d.Name namesBefore) then
+                                d.Close(box false, Type.Missing)
+
+                            ()))
+                with _ ->
+                    ()
+
+            do! Task.Delay 500
+            let namesAfter = busy (fun () -> Sta.run(fun () -> [ for d in app.Documents -> d.Name ]))
+            Report.line2 output "核对" "图纸" (sprintf "%A → %A" namesBefore namesAfter)
+            Should.equal namesBefore namesAfter
+
+            let now = Report.procIds "acad"
+            Report.line2 output "进程" "acad" (sprintf "%A → %A" (Set.toList before) (Set.toList now))
+            Should.equal before now
+
+            Report.conclusion
+                output
+                "通过：通知未到同步读也读不到；通知到达后同步 Sta.run 与异步读到的值完全相同 —— 读取不必异步，异步只用在等 AutoCAD 通知，读值仍由 Busy.retry 兜忙"
+        }
