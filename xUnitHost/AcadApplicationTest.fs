@@ -487,125 +487,6 @@ type AcadApplicationTest(output: ITestOutputHelper) =
             "通过：只给 PID 就挂回那一只 acad 并读到全部进程侧事实；黑板 10 行里 PID 是唯一必需输入，其余为可现查的冗余、会变的快照，或插件自报（DLL 路径与时间戳、采集时间）"
 
     [<Fact>]
-    member this.``Application 模块 用 Task 包裹的动作在 AutoCAD 里画一个圆``() =
-        Report.title output "Application 模块：就绪订阅 + Task 包住「挂回 → 画圆 → 读回 → 收尾」"
-
-        let before = Report.procIds "acad"
-
-        if before.IsEmpty then
-            Assert.Skip("本机没有开着的 acad，按约定不替用户新起 AutoCAD（要测显式设 XUNITHOST_LAUNCH_ACAD=1）")
-
-        let pid = Set.minElement before
-
-        // 调用方（模型）只提交一个 Task：整段动作打包在一起，await 到才算结束。
-        // 但内部每一步走 gate.SubmitAsync —— AutoCAD 通知 ready 之前不发下一步，
-        // 正好挡住「Documents.Add() 返回了、AutoCAD 还没接住」那段撞 RPC_E_CALL_REJECTED 的空窗。
-        let work =
-            AutoCADHost.Application.executeAsync pid (fun gate _ ->
-                task {
-                    // ① 先认清用户手上的图纸（只读）
-                    let! user =
-                        gate.SubmitAsync(fun a ->
-                            let d = a.ActiveDocument
-                            {| Name = d.Name
-                               Entities = d.ModelSpace.Count
-                               Documents = a.Documents.Count |})
-
-                    // ② 新建一张只属于这次调用的空图；只把名字带过 await，不带 RCW
-                    let! tempName = gate.SubmitAsync(fun a -> a.Documents.Add().Name)
-
-                    // ③ 画圆并当场读回：圆心 / 半径 / 实体数全是纯数据
-                    let! drawn =
-                        gate.SubmitAsync(fun a ->
-                            let ms = a.ActiveDocument.ModelSpace
-                            let circle = ms.AddCircle(box [| 10.0; 20.0; 0.0 |], 5.0)
-
-                            let center =
-                                match circle.Center with
-                                | :? Array as values ->
-                                    values
-                                    |> Seq.cast<obj>
-                                    |> Seq.map(fun v -> Convert.ToDouble v)
-                                    |> Seq.toArray
-                                | _ -> [||]
-
-                            {| Center = center
-                               Radius = circle.Radius
-                               Entities = ms.Count |})
-
-                    // ④ 只关这次新建的那张：名字对得上才关，绝不误关用户图纸。
-                    // 关图只认 ActiveDocument.Close(box false, Type.Missing)（见 gotchas.md）。
-                    let! closed =
-                        gate.SubmitAsync(fun a ->
-                            let d = a.ActiveDocument
-
-                            if d.Name = tempName then
-                                d.Close(box false, Type.Missing)
-                                true
-                            else
-                                false)
-
-                    // ⑤ 收尾核对（同样等一次 ready 再读）
-                    let! after =
-                        gate.SubmitAsync(fun a ->
-                            let d = a.ActiveDocument
-                            {| Name = d.Name
-                               Entities = d.ModelSpace.Count
-                               Documents = a.Documents.Count |})
-
-                    return
-                        {| User = user
-                           TempDoc = tempName
-                           Center = drawn.Center
-                           Radius = drawn.Radius
-                           Entities = drawn.Entities
-                           Closed = closed
-                           After = after
-                           Subscriptions = gate.Subscriptions
-                           Notices = gate.Notices |}
-                })
-
-        let clock = Stopwatch.StartNew()
-        let r = work.GetAwaiter().GetResult()
-        clock.Stop()
-
-        Report.line output "现场" (sprintf "acad %d；原有图纸「%s」，一个字不动" pid r.User.Name)
-        Report.line output "调用形状" "executeAsync : pid -> (Gate -> AcadApplication -> Task<'T>) -> Task<'T>"
-        Report.line output "订阅" (sprintf "挂上 %A（AutoCAD 的完成通知）" r.Subscriptions)
-        Report.line output "通知" (sprintf "这次收到 %A" r.Notices)
-        Report.line output "分步" "① 认图 → ② 新建 → ③ 画圆 → ④ 关图 → ⑤ 核对，每步一个 Task，ready 才发下一步"
-        Report.line output "模型动作" "ModelSpace.AddCircle(center=[10;20;0], radius=5)"
-        Report.line output "临时图" (sprintf "%s（Documents.Add 新建，Close(false) 不保存关掉）" r.TempDoc)
-        Report.line output "读回" (sprintf "圆心 %A / 半径 %.1f / ModelSpace %d 个实体" r.Center r.Radius r.Entities)
-        Report.line2 output "核对" "原图实体数" (sprintf "%d → %d" r.User.Entities r.After.Entities)
-        Report.line2 output "核对" "图纸总数" (sprintf "%d → %d" r.User.Documents r.After.Documents)
-        Report.line2 output "核对" "活动图" (sprintf "%s → %s" r.User.Name r.After.Name)
-
-        Report.line
-            output
-            "Task"
-            (sprintf "IsCompleted=%b / 整段耗时 %dms（含 5 次等 ready + 画圆 + 收尾）" work.IsCompleted clock.ElapsedMilliseconds)
-
-        Report.line output "对比" "GetApplicationAsync 的 Task 在挂回时就完成；这个 Task 在动作与收尾都完成后才完成"
-
-        Should.equal [| 10.0; 20.0; 0.0 |] r.Center
-        Should.equal 5.0 r.Radius
-        Should.equal 1 r.Entities
-        Should.equal true r.Closed
-        Should.equal true work.IsCompleted
-        Should.equal r.User.Entities r.After.Entities
-        Should.equal r.User.Documents r.After.Documents
-        Should.equal r.User.Name r.After.Name
-
-        let now = Report.procIds "acad"
-        Report.line2 output "进程" "acad" (sprintf "%A → %A" (Set.toList before) (Set.toList now))
-        Should.equal before now
-
-        Report.conclusion
-            output
-            "通过：订阅到 AutoCAD 的完成通知后逐步发命令，整段包成一个 Task；圆画在自己的临时图里并读回核对，用户图纸一个字没动"
-
-    [<Fact>]
     member this.``Application 模块 就绪订阅的判定规则 通知后连中与静置才放行``() =
         Report.title output "Application 模块：就绪订阅的判定规则（纯逻辑，不连 AutoCAD）"
 
@@ -722,3 +603,121 @@ type AcadApplicationTest(output: ITestOutputHelper) =
         Report.conclusion
             output
             "通过：非 acad 的 PID 在挂回前就被拒，订阅根本没建立；异常落在 await 上，四家进程一个没起、一个没关"
+
+    [<Fact>]
+    member this.``Application 模块用 Task 包裹的动作在 AutoCAD 里画一个圆``() =
+        task {
+            Report.title output "Application 模块：一个 Task 里的「挂回 → 画圆 → 读回 → 收尾」"
+
+            let before = Report.procIds "acad"
+
+            if before.IsEmpty then
+                Assert.Skip("本机没有开着的 acad，按约定不替用户新起 AutoCAD")
+
+            let pid = Set.minElement before
+            Report.line output "现场" (sprintf "acad %d（本来就开着的实例，不新建、不 Quit）" pid)
+
+            // 整段动作就是一个 Task：await 到 Application 才算挂回完成，await 到最后才算这活干完。
+            let! acad = AutoCADHost.Application.GetApplicationAsync pid
+
+            // COM 只在库里那条固定 STA 线程上用；忙时由 Busy.retry 等一下再来。
+            // 重试放在 Sta.run 外面，别把 STA 线程睡死（它还要泵 COM 消息）。
+            let retries = ref 0
+
+            let onSta (work: unit -> 'T) : 'T =
+                let mutable first = true
+
+                Busy.retry 30000 (fun () ->
+                    if not first then
+                        incr retries
+
+                    first <- false
+                    Sta.run work)
+
+            // 你手上那张图：只认人，一个字不写。
+            let dwg = onSta(fun () -> acad.ActiveDocument)
+
+            let user =
+                onSta(fun () ->
+                    {| Name = dwg.Name
+                       Entities = dwg.ModelSpace.Count
+                       Documents = acad.Documents.Count |})
+
+            Report.line
+                output
+                "认人"
+                (sprintf "「%s」实体数 %d / 图纸数 %d（只读）" user.Name user.Entities user.Documents)
+
+            // 画一个圆：只往这次自己新建的空图里画。
+            // Add() 单独一步，不和读属性连写 —— 忙时重试只读那一步，不会重复建图。
+            let temp = onSta(fun () -> acad.Documents.Add())
+            let tempName = onSta(fun () -> temp.Name)
+            Report.line output "临时图" (sprintf "%s（Documents.Add 新建）" tempName)
+
+            // 画圆本身只做一次；读回是纯只读，可以安全重试。
+            let circle =
+                onSta(fun () -> acad.ActiveDocument.ModelSpace.AddCircle(box [| 10.0; 20.0; 0.0 |], 5.0))
+
+            let drawn =
+                onSta(fun () ->
+                    let center =
+                        match circle.Center with
+                        | :? Array as values ->
+                            values
+                            |> Seq.cast<obj>
+                            |> Seq.map(fun v -> Convert.ToDouble v)
+                            |> Seq.toArray
+                        | _ -> [||]
+
+                    {| Center = center
+                       Radius = circle.Radius
+                       Entities = acad.ActiveDocument.ModelSpace.Count |})
+
+            Report.line2 output "读回" "圆心" (sprintf "%A" drawn.Center)
+            Report.line2 output "读回" "半径" (sprintf "%.1f" drawn.Radius)
+            Report.line2 output "读回" "实体数" (string drawn.Entities)
+
+            // 不保存关掉，只认这次新建的那张。
+            // 不在 Close 之后立刻枚举 Documents：集合正在变，枚举本身会抛非忙异常；
+            // 「关没关掉」交给下面 after 的图纸数 / 活动图名去证。
+            let closeNote =
+                onSta(fun () ->
+                    let active = acad.ActiveDocument
+
+                    if active.Name = tempName then
+                        active.Close(box false, Type.Missing)
+                        sprintf "已关闭 %s（不保存）" tempName
+                    else
+                        sprintf "活动图已是 %s，不用再关" active.Name)
+
+            Report.line output "收尾" closeNote
+
+            let after =
+                onSta(fun () ->
+                    let d = acad.ActiveDocument
+                    {| Name = d.Name
+                       Entities = d.ModelSpace.Count
+                       Documents = acad.Documents.Count |})
+
+            Report.line2 output "核对" "原图实体数" (sprintf "%d → %d" user.Entities after.Entities)
+            Report.line2 output "核对" "图纸数" (sprintf "%d → %d" user.Documents after.Documents)
+            Report.line2 output "核对" "活动图" (sprintf "%s → %s" user.Name after.Name)
+
+            Should.equal [| 10.0; 20.0; 0.0 |] drawn.Center
+            Should.equal 5.0 drawn.Radius
+            Should.equal 1 drawn.Entities
+            Should.equal false (after.Name = tempName)
+            Should.equal user.Entities after.Entities
+            Should.equal user.Documents after.Documents
+            Should.equal user.Name after.Name
+
+            let now = Report.procIds "acad"
+            Report.line2 output "进程" "acad" (sprintf "%A → %A" (Set.toList before) (Set.toList now))
+            Should.equal before now
+            Report.line output "忙重试" (sprintf "%d 次（Busy.retry 接住的 RPC_E_CALL_REJECTED）" retries.Value)
+
+            Report.conclusion
+                output
+                "通过：一个 Task 包住整段动作，await 到才结束；圆画在临时图里并读回核对，用户图纸一个字没动"
+
+        }
