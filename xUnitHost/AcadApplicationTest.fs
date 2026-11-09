@@ -605,119 +605,123 @@ type AcadApplicationTest(output: ITestOutputHelper) =
             "通过：非 acad 的 PID 在挂回前就被拒，订阅根本没建立；异常落在 await 上，四家进程一个没起、一个没关"
 
     [<Fact>]
-    member this.``Application 模块用 Task 包裹的动作在 AutoCAD 里画一个圆``() =
+    member this.``在 AutoCAD 里画一个圆``() =
         task {
-            Report.title output "Application 模块：一个 Task 里的「挂回 → 画圆 → 读回 → 收尾」"
+            Report.title output "在 AutoCAD 里连画 10 个图形：逐笔看 COM 会不会拒"
 
             let before = Report.procIds "acad"
 
             if before.IsEmpty then
-                Assert.Skip("本机没有开着的 acad，按约定不替用户新起 AutoCAD")
+                Assert.Skip("本机没有开着的 acad，按约定不替用户新起 AutoCAD（要测显式设 XUNITHOST_LAUNCH_ACAD=1）")
 
             let pid = Set.minElement before
-            Report.line output "现场" (sprintf "acad %d（本来就开着的实例，不新建、不 Quit）" pid)
-
             // 整段动作就是一个 Task：await 到 Application 才算挂回完成，await 到最后才算这活干完。
             let! acad = AutoCADHost.Application.GetApplicationAsync pid
 
-            // COM 只在库里那条固定 STA 线程上用；忙时由 Busy.retry 等一下再来。
-            // 重试放在 Sta.run 外面，别把 STA 线程睡死（它还要泵 COM 消息）。
-            let retries = ref 0
+            // 口径按你草稿的直连形状：COM 调用直接发，不包 Sta.run、不拆属性读取。
+            // 只有「必须成功」的前置 / 读回 / 收尾带 Busy.retry 兜忙；被探测的写动作一笔都不重试。
+            let busy (work: unit -> 'T) : 'T = Busy.retry 30000 work
 
-            let onSta (work: unit -> 'T) : 'T =
-                let mutable first = true
+            // 跑前基线：现在可能一张图都没开（Documents.Count = 0 时 ActiveDocument 抛 0x8021003C）。
+            let docCountBefore = busy (fun () -> acad.Documents.Count)
+            Report.line output "现场" (sprintf "acad %d（本来就开着的实例，不新建、不 Quit）" pid)
+            Report.line output "基线" (sprintf "图纸数 %d（0 份图纸时 ActiveDocument 取不到）" docCountBefore)
 
-                Busy.retry 30000 (fun () ->
-                    if not first then
-                        incr retries
+            // 用户手上的图一个字不写：一律新建临时图，画完不保存关掉。
+            let dwg = busy (fun () -> acad.Documents.Add())
+            let tempName = busy (fun () -> dwg.Name)
+            let ms = busy (fun () -> dwg.ModelSpace)
+            Report.line output "临时图" (sprintf "%s（Documents.Add 新建，画完不保存关掉）" tempName)
+            Report.line output "口径" "直连：写动作不包 Sta.run、不包 Busy.retry、不拆属性读取；每笔单独 try/with"
 
-                    first <- false
-                    Sta.run work)
+            // 「多画几个图形」：10 种实体连着发，中间不等 ready、不重试。
+            let pt (x: double) (y: double) : obj = box [| x; y; 0.0 |]
 
-            // 你手上那张图：只认人，一个字不写。
-            let dwg = onSta(fun () -> acad.ActiveDocument)
+            let shapes: (string * (unit -> obj)) list =
+                [ "AddCircle", (fun () -> box (ms.AddCircle(pt 10.0 20.0, 5.0)))
+                  "AddLine", (fun () -> box (ms.AddLine(pt 0.0 0.0, pt 30.0 0.0)))
+                  "AddArc", (fun () -> box (ms.AddArc(pt 50.0 20.0, 8.0, 0.0, Math.PI / 2.0)))
+                  "AddLightWeightPolyline",
+                  (fun () -> box (ms.AddLightWeightPolyline(box [| 0.0; 0.0; 10.0; 0.0; 10.0; 10.0; 0.0; 10.0 |])))
+                  "AddText", (fun () -> box (ms.AddText("XH", pt 5.0 35.0, 3.0)))
+                  "AddPoint", (fun () -> box (ms.AddPoint(pt 40.0 40.0)))
+                  "AddEllipse", (fun () -> box (ms.AddEllipse(pt 60.0 50.0, box [| 10.0; 0.0; 0.0 |], 0.5)))
+                  "AddCircle 2", (fun () -> box (ms.AddCircle(pt 80.0 20.0, 3.0)))
+                  "AddLine 2", (fun () -> box (ms.AddLine(pt 0.0 50.0, pt 50.0 50.0)))
+                  "AddPolyline",
+                  (fun () -> box (ms.AddPolyline(box [| 0.0; 0.0; 0.0; 20.0; 0.0; 0.0; 20.0; 20.0; 0.0 |]))) ]
 
-            let user =
-                onSta(fun () ->
-                    {| Name = dwg.Name
-                       Entities = dwg.ModelSpace.Count
-                       Documents = acad.Documents.Count |})
+            let results =
+                shapes
+                |> List.mapi(fun i (name, draw) ->
+                    let verdict =
+                        try
+                            let entity = draw ()
+
+                            if isNull entity then
+                                "OK（返回 null）"
+                            else
+                                "OK " + entity.GetType().Name
+                        with ex ->
+                            sprintf "%s 0x%08X：%s" (ex.GetType().Name) (uint32 ex.HResult) ex.Message
+
+                    Report.line2 output (sprintf "第%d笔" (i + 1)) name verdict
+                    name, verdict)
+
+            let okCount = results |> List.filter(fun (_, v) -> v.StartsWith "OK") |> List.length
+            let rejected = results |> List.filter(fun (_, v) -> not (v.StartsWith "OK"))
+
+            let codes =
+                rejected
+                |> List.map(fun (_, v) -> v.Split([| '：' |]).[0])
+                |> List.countBy id
+                |> List.map(fun (code, n) -> sprintf "%s ×%d" code n)
+                |> String.concat "；"
 
             Report.line
                 output
-                "认人"
-                (sprintf "「%s」实体数 %d / 图纸数 %d（只读）" user.Name user.Entities user.Documents)
+                "统计"
+                (sprintf
+                    "%d 笔：OK %d / 被拒 %d%s"
+                    results.Length
+                    okCount
+                    rejected.Length
+                    (if rejected.IsEmpty then "" else "（" + codes + "）"))
 
-            // 画一个圆：只往这次自己新建的空图里画。
-            // Add() 单独一步，不和读属性连写 —— 忙时重试只读那一步，不会重复建图。
-            let temp = onSta(fun () -> acad.Documents.Add())
-            let tempName = onSta(fun () -> temp.Name)
-            Report.line output "临时图" (sprintf "%s（Documents.Add 新建）" tempName)
+            // 读回实体数：这一笔允许重试，只用来核对「成功笔数 == 真画进去的实体数」。
+            let entityCount = busy (fun () -> ms.Count)
+            Report.line output "读回" (sprintf "ModelSpace 实体数 %d（成功 %d 笔）" entityCount okCount)
+            Should.equal okCount entityCount
 
-            // 画圆本身只做一次；读回是纯只读，可以安全重试。
-            let circle =
-                onSta(fun () -> acad.ActiveDocument.ModelSpace.AddCircle(box [| 10.0; 20.0; 0.0 |], 5.0))
-
-            let drawn =
-                onSta(fun () ->
-                    let center =
-                        match circle.Center with
-                        | :? Array as values ->
-                            values
-                            |> Seq.cast<obj>
-                            |> Seq.map(fun v -> Convert.ToDouble v)
-                            |> Seq.toArray
-                        | _ -> [||]
-
-                    {| Center = center
-                       Radius = circle.Radius
-                       Entities = acad.ActiveDocument.ModelSpace.Count |})
-
-            Report.line2 output "读回" "圆心" (sprintf "%A" drawn.Center)
-            Report.line2 output "读回" "半径" (sprintf "%.1f" drawn.Radius)
-            Report.line2 output "读回" "实体数" (string drawn.Entities)
-
-            // 不保存关掉，只认这次新建的那张。
-            // 不在 Close 之后立刻枚举 Documents：集合正在变，枚举本身会抛非忙异常；
-            // 「关没关掉」交给下面 after 的图纸数 / 活动图名去证。
-            let closeNote =
-                onSta(fun () ->
+            // 收尾：只认这次新建的那张，不保存关掉；关完图纸数应回到跑前。
+            let closed =
+                busy (fun () ->
                     let active = acad.ActiveDocument
 
                     if active.Name = tempName then
                         active.Close(box false, Type.Missing)
-                        sprintf "已关闭 %s（不保存）" tempName
+                        true
                     else
-                        sprintf "活动图已是 %s，不用再关" active.Name)
+                        false)
 
-            Report.line output "收尾" closeNote
+            // Close 之后集合正在变，立刻枚举会抛非忙异常，等半拍再核对。
+            do! Task.Delay 500
+            let docCountAfter = busy (fun () -> acad.Documents.Count)
 
-            let after =
-                onSta(fun () ->
-                    let d = acad.ActiveDocument
-                    {| Name = d.Name
-                       Entities = d.ModelSpace.Count
-                       Documents = acad.Documents.Count |})
-
-            Report.line2 output "核对" "原图实体数" (sprintf "%d → %d" user.Entities after.Entities)
-            Report.line2 output "核对" "图纸数" (sprintf "%d → %d" user.Documents after.Documents)
-            Report.line2 output "核对" "活动图" (sprintf "%s → %s" user.Name after.Name)
-
-            Should.equal [| 10.0; 20.0; 0.0 |] drawn.Center
-            Should.equal 5.0 drawn.Radius
-            Should.equal 1 drawn.Entities
-            Should.equal false (after.Name = tempName)
-            Should.equal user.Entities after.Entities
-            Should.equal user.Documents after.Documents
-            Should.equal user.Name after.Name
+            Report.line output "收尾" (sprintf "临时图已关闭（不保存）= %b" closed)
+            Report.line2 output "核对" "图纸数" (sprintf "%d → %d" docCountBefore docCountAfter)
+            Should.equal true closed
+            Should.equal docCountBefore docCountAfter
 
             let now = Report.procIds "acad"
             Report.line2 output "进程" "acad" (sprintf "%A → %A" (Set.toList before) (Set.toList now))
             Should.equal before now
-            Report.line output "忙重试" (sprintf "%d 次（Busy.retry 接住的 RPC_E_CALL_REJECTED）" retries.Value)
 
             Report.conclusion
                 output
-                "通过：一个 Task 包住整段动作，await 到才结束；圆画在临时图里并读回核对，用户图纸一个字没动"
-
+                (sprintf
+                    "通过：%d 笔写动作里 OK %d / 被拒 %d；临时图不保存关掉，用户现场没动"
+                    results.Length
+                    okCount
+                    rejected.Length)
         }
