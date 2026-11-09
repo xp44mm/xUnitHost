@@ -219,7 +219,10 @@ module Application =
         }
 
     /// 只提交一次的简写：整段动作写在一个同步 lambda 里，对外仍是一个 Task，
-    /// 内部同样先等 ready、跑完再等 ready；完成时刻由 AutoCAD 的通知决定，不是 COM 返回。
+    /// 内部先等 ready、跑完再等 ready；完成时刻由 AutoCAD 的通知决定，不是 COM 返回。
+    /// 注意：**只保证动作前后有握手，动作内部连续多条 COM 调用之间没有** ——
+    /// Documents.Add() 后紧跟 AddCircle 这类多步写操作仍会撞忙，那种要用
+    /// executeAsync + gate.SubmitAsync 拆成多步。本入口适合单条命令或一串只读。
     let executeOnceAsync (pid: int) (action: AcadApplication -> 'T) : Task<'T> =
         executeAsync pid (fun gate _ -> gate.SubmitAsync action)
 
