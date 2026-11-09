@@ -15,6 +15,7 @@
 | OS 层 / 进程地址 / 起关命令 | `OsHost/{OsHost.fs,Address.fs,ProcHost.fs,GeneralAppInfo.fs}` |
 | 四家 COM host（取实例/认自己/收尾/`Security`） | `WordHost` / `ExcelHost` / `PowerPointHost` / `AutoCADHost` |
 | 按 PID 挂回 acad 的 COM 根对象 | `AutoCADHost/Application.fs`：`byPid` / `byPidWithRoots` / `rootsOf` / `describeByPid` / `boundary`；**异步** `GetApplicationAsync` / `GetApplicationWithRootsAsync`（`Task<AcadApplication>` / `Task<ApplicationRoots>`，失败即 faulted Task 不包 Result，走 `OsHost.Sta.runAsync`）+ `OsHost.Com.runningEntries`（只在只有 PID 时枚举 ROT 兜底）。COM 公寓不变：await 后用 RCW 仍 `Sta.run`。验证 `xUnitHost/AcadApplicationTest.fs`（`-m "*按 PID*"` / `-m "*异步*"` / `-m "*比对*"`）。黑板比对实证：只给 PID 够用，HWND / EXE / 版本可凭 PID 现查，图纸与采集时间是快照；.NET 托管 DLL 不进 `Process.Modules`，插件自报的 DLL 路径只能校磁盘文件 |
+| AutoCAD 就绪订阅 / 动作 Task（替代撞忙重试） | `AutoCADHost/Ready.fs`（`Rule` 纯判定器可注入假时钟 + `Gate` 订阅 `EndOpen`/`NewDrawing`/`EndCommand`/`EndModal`，`WhenReadyAsync` / `SubmitAsync` / `Subscriptions` / `Notices` / 退订）+ `Application.fs` 的 `executeAsync` / `executeOnceAsync`。**`Ready.fs` 须排在 `Application.fs` 之前编译**。判据：连中 5 次 `AcadState.IsQuiescent` + 距最近动静静置 1.5s；事件只把计时归零，最终看 AutoCAD 自己 quiescent；事件挂不上就退化成纯观察并如实报 `Subscriptions`。**动作 COM 调用跑完不算完，等 ready 才让 Task 完成** → 调用方串行 `let!` 才发下一条，不用 `Busy.retry` 撞 `RPC_E_CALL_REJECTED`。验证 `-m "*就绪订阅*"`（2 条纯逻辑 / 负例，不碰真机）；真机画圆 `-m "*画一个圆*"` 已改成 5 步 Submit 但**尚未跑** |
 | 会话层（地址、指纹、两种模式） | `xUnitHost/Session.fs`（前部） |
 | 报告 / 认人 / 忙重试 | `xUnitHost/Common.fs`：`module internal Report` / `Doc` / `Busy` |
 | 批量转换底座 | `xUnitHost/ConvertCore.fs`（Item / Outcome / Paths），前部 |

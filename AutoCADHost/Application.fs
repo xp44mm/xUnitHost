@@ -201,6 +201,28 @@ module Application =
         | Error message -> Task.FromException<AcadApplication>(InvalidOperationException(message) :> exn)
         | Ok() -> Sta.runAsync(fun () -> findOnSta pid |> Result.map fst |> unwrap)
 
+    /// 「把动作送进 AutoCAD」的入口：pid + 一段动作 → 一个 Task。
+    /// 与 GetApplicationAsync 不同：这个 Task 要等「挂回 → 订阅 ready 通知 → 每一动作都等到
+    /// AutoCAD 的完成信号 → 退订」全做完才完成，调用方 await 到才算结束。
+    ///
+    /// 动作通过 gate.SubmitAsync 逐步提交：每一步是一个独立 Task，AutoCAD 通知 ready 之前
+    /// 不会发下一步 —— 正是「打开一个 dwg 后 task.completed() 才能继续」的形状。
+    /// 也可以整段只 SubmitAsync 一次，那就是「打开命令和后续动作打包成一个动作、算一个 task」。
+    /// 订阅挂在 AutoCAD 的 COM 事件（EndOpen / NewDrawing / EndCommand / EndModal）上，
+    /// 放行还看 AcadState.IsQuiescent 连中 + 静置；不用 Busy.retry 去撞 RPC_E_CALL_REJECTED。
+    /// 失败一律是 faulted Task（await 抛异常），不包 Result。
+    let executeAsync (pid: int) (action: Ready.Gate -> AcadApplication -> Task<'T>) : Task<'T> =
+        task {
+            let! app = GetApplicationAsync pid
+            use gate = Ready.subscribe app
+            return! action gate app
+        }
+
+    /// 只提交一次的简写：整段动作写在一个同步 lambda 里，对外仍是一个 Task，
+    /// 内部同样先等 ready、跑完再等 ready；完成时刻由 AutoCAD 的通知决定，不是 COM 返回。
+    let executeOnceAsync (pid: int) (action: AcadApplication -> 'T) : Task<'T> =
+        executeAsync pid (fun gate _ -> gate.SubmitAsync action)
+
     /// 配套的一步到位异步入口：Application + 全部 COM 根对象 + 现场读数。
     /// 挂回与读值都在同一条 STA 线程上做完，免得异步链被同步的 rootsOf 截断。
     /// 失败同样是 faulted Task，await 时抛异常。

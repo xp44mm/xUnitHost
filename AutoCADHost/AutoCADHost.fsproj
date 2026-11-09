@@ -17,6 +17,8 @@
 
   <ItemGroup>
     <Compile Include="Host.fs" />
+    <!-- 就绪订阅先编译：Application.executeAsync 要用 Ready.Gate -->
+    <Compile Include="Ready.fs" />
     <Compile Include="Application.fs" />
   </ItemGroup>
 
