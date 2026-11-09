@@ -373,6 +373,77 @@ module Com =
                 )
             )
 
+    [<DllImport("ole32.dll")>]
+    extern int CreateBindCtx(int reserved, nativeint& ppbc)
+
+    /// 造一个绑定上下文（读 moniker 的显示名要它）
+    let private bindContext () : IBindCtx option =
+        let mutable punk = IntPtr.Zero
+
+        if CreateBindCtx(0, &punk) <> 0 then
+            None
+        else
+            match comObject punk with
+            | Some raw ->
+                (try
+                    Some(raw :?> IBindCtx)
+                 with _ ->
+                    None)
+            | None -> None
+
+    /// 枚举 ROT 当前登记的全部对象，逐条给 (显示名, 对象)。
+    ///
+    /// 只在「调用方只有 PID、没有精确 ROT 注册名」时才用，而且**必须自己核身份**
+    /// （哪一家的 host 就用哪一家的窗口 → PID 比对），绝不能拿第一条就当目标。
+    /// 黑板模式有精确名字，仍走 runningAt，不枚举（见 references/gotchas.md）。
+    /// 单条取名字 / 绑定失败就跳过那一条；绝不新建实例。
+    let runningEntries () : (string * obj) list =
+        try
+            match runningTable () with
+            | None -> []
+            | Some table ->
+                let ctx = bindContext ()
+                let mutable enumerator: IEnumMoniker = Unchecked.defaultof<IEnumMoniker>
+                table.EnumRunning(&enumerator)
+
+                if obj.ReferenceEquals(enumerator, null) then
+                    []
+                else
+                    let found = ResizeArray<string * obj>()
+                    let batch: IMoniker array = Array.zeroCreate 1
+                    let mutable go = true
+
+                    while go && found.Count < 512 do
+                        batch.[0] <- Unchecked.defaultof<IMoniker>
+
+                        if enumerator.Next(1, batch, IntPtr.Zero) <> 0 || obj.ReferenceEquals(batch.[0], null) then
+                            go <- false
+                        else
+                            let moniker = batch.[0]
+
+                            let name =
+                                try
+                                    match ctx with
+                                    | Some context ->
+                                        let mutable display: string = null
+                                        moniker.GetDisplayName(context, null, &display)
+                                        if String.IsNullOrWhiteSpace display then "-" else display
+                                    | None -> "-"
+                                with _ ->
+                                    "-"
+
+                            try
+                                let mutable value: obj = null
+
+                                if table.GetObject(moniker, &value) = 0 && not (isNull value) then
+                                    found.Add((name, value))
+                            with _ ->
+                                ()
+
+                    List.ofSeq found
+        with _ ->
+            []
+
     /// 按 ROT 注册名精确取现成实例（例：!WordVSTO.Instance.27232）。**绝不新建**：
     /// 名字没登记、登记的实例已经退出，都只返回 None。多实例机器上这是唯一不会认错人的挂法。
     let runningAt (rotName: string) : obj option =

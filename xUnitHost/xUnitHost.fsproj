@@ -47,6 +47,8 @@
     <Compile Include="CommandTest.fs" />
     <Compile Include="RxCommandTest.fs" />
     <Compile Include="PptUpgradeTest.fs" />
+    <!-- AutoCADHost.Application：按 PID 挂回 COM Application + 根对象 -->
+    <Compile Include="AcadApplicationTest.fs" />
   </ItemGroup>
 
   <ItemGroup>
