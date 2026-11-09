@@ -14,7 +14,7 @@
 |---|---|
 | OS 层 / 进程地址 / 起关命令 | `OsHost/{OsHost.fs,Address.fs,ProcHost.fs,GeneralAppInfo.fs}` |
 | 四家 COM host（取实例/认自己/收尾/`Security`） | `WordHost` / `ExcelHost` / `PowerPointHost` / `AutoCADHost` |
-| 按 PID 挂回 acad 的 COM 根对象 | `AutoCADHost/Application.fs`：`byPid` / `byPidWithRoots` / `rootsOf` / `describeByPid` / `boundary`；**异步** `GetApplicationAsync` / `GetApplicationWithRootsAsync`（`Task<AcadApplication>` / `Task<ApplicationRoots>`，失败即 faulted Task 不包 Result，走 `OsHost.Sta.runAsync`）+ `OsHost.Com.runningEntries`（只在只有 PID 时枚举 ROT 兜底）。COM 公寓不变：await 后用 RCW 仍 `Sta.run`。验证 `xUnitHost/AcadApplicationTest.fs`（`-m "*按 PID*"` / `-m "*异步*"`） |
+| 按 PID 挂回 acad 的 COM 根对象 | `AutoCADHost/Application.fs`：`byPid` / `byPidWithRoots` / `rootsOf` / `describeByPid` / `boundary`；**异步** `GetApplicationAsync` / `GetApplicationWithRootsAsync`（`Task<AcadApplication>` / `Task<ApplicationRoots>`，失败即 faulted Task 不包 Result，走 `OsHost.Sta.runAsync`）+ `OsHost.Com.runningEntries`（只在只有 PID 时枚举 ROT 兜底）。COM 公寓不变：await 后用 RCW 仍 `Sta.run`。验证 `xUnitHost/AcadApplicationTest.fs`（`-m "*按 PID*"` / `-m "*异步*"` / `-m "*比对*"`）。黑板比对实证：只给 PID 够用，HWND / EXE / 版本可凭 PID 现查，图纸与采集时间是快照；.NET 托管 DLL 不进 `Process.Modules`，插件自报的 DLL 路径只能校磁盘文件 |
 | 会话层（地址、指纹、两种模式） | `xUnitHost/Session.fs`（前部） |
 | 报告 / 认人 / 忙重试 | `xUnitHost/Common.fs`：`module internal Report` / `Doc` / `Busy` |
 | 批量转换底座 | `xUnitHost/ConvertCore.fs`（Item / Outcome / Paths），前部 |
