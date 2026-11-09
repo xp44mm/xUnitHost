@@ -70,6 +70,23 @@ module Sta =
 
         unbox<'T> (pending.Task.GetAwaiter().GetResult())
 
+    /// 异步版：活儿仍排在**同一条固定 STA 线程**上，但立刻把 Task 交回调用方，
+    /// 不占调用线程、也不占一条线程池线程干等。
+    /// 用 RunContinuationsAsynchronously：await 的续体不许同步跑在那条 STA 线程上
+    /// （否则续体里再调 run/runAsync 就会自己等自己）。
+    /// 注意：COM 对象依旧只在 STA 线程上创建 / 使用，await 之后要用它，仍得 run / runAsync。
+    let runAsync (work: unit -> 'T) : Task<'T> =
+        started.Force() |> ignore
+        let pending = TaskCompletionSource<'T>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+        jobs.Add(fun () ->
+            try
+                pending.SetResult(work ())
+            with ex ->
+                pending.SetException ex)
+
+        pending.Task
+
     /// 短活：当前线程不是 STA 时，把活儿丢给一条临时 STA 线程跑完再回来
     let here (work: unit -> 'T) : 'T =
         if Thread.CurrentThread.GetApartmentState() = ApartmentState.STA then

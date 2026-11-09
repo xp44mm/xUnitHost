@@ -4,6 +4,8 @@
 namespace XUnitHost
 
 open System
+open System.Threading
+open System.Threading.Tasks
 open Xunit
 open FSharp.xUnit
 open OsHost
@@ -146,3 +148,122 @@ type AcadApplicationTest(output: ITestOutputHelper) =
         Should.equal before now
 
         Report.conclusion output "通过：兜底路径能把 ROT 登记项逐条列出并取回对象，acad 进程没增没减"
+
+    [<Fact>]
+    member this.``Application 模块 异步 GetApplicationAsync 与同步 byPid 结果一致``() =
+        Report.title output "Application 模块：GetApplicationAsync 异步挂回，结果与同步 byPid 一致"
+
+        let before = Report.procIds "acad"
+
+        if before.IsEmpty then
+            Assert.Skip("本机没有开着的 acad，按约定不替用户新起 AutoCAD（要测显式设 XUNITHOST_LAUNCH_ACAD=1）")
+
+        let pid = Set.minElement before
+        let callerThread = Environment.CurrentManagedThreadId
+        Report.line output "给定 PID" (sprintf "%d（本机本来就开着的 acad）" pid)
+        Report.line output "调用线程" (string callerThread)
+
+        // task { } 里是真的 await；最外层才同步等，免得依赖 xunit 对 F# Task 测试方法的发现。
+        let work =
+            task {
+                let! appResult = AutoCADHost.Application.GetApplicationAsync pid
+                let! rootsResult = AutoCADHost.Application.GetApplicationWithRootsAsync pid
+
+                // await 之后要用 RCW，仍包回固定 STA 线程；顺手量一下续体和 STA 是不是同一条线程
+                let version =
+                    Sta.run(fun () ->
+                        match appResult with
+                        | Ok app -> app.Version
+                        | Error _ -> "")
+
+                let staThread = Sta.run(fun () -> Thread.CurrentThread.ManagedThreadId)
+                let resumeThread = Environment.CurrentManagedThreadId
+                return (appResult, rootsResult, version, staThread, resumeThread)
+            }
+
+        let appResult, rootsResult, version, staThread, resumeThread =
+            work.GetAwaiter().GetResult()
+
+        Report.line output "Task 形状" "GetApplicationAsync pid → Task<Result<AcadApplication,string>>"
+
+        Report.line2
+            output
+            "异步结果"
+            "Application"
+            (match appResult with
+             | Ok app -> if isNull (box app) then "null" else "AcadApplication 已挂回"
+             | Error message -> message)
+
+        Report.line output "版本" version
+        Report.line output "线程" (sprintf "STA %d / 调用 %d / await 续体 %d" staThread callerThread resumeThread)
+
+        let roots = Report.ok rootsResult
+        Report.line2 output "根对象" "PID" (string roots.Pid)
+        Report.line2 output "根对象" "图纸数" (string roots.DocumentCount)
+
+        Should.equal true (
+            match appResult with
+            | Ok app -> not (isNull (box app))
+            | Error _ -> false
+        )
+
+        Should.equal pid roots.Pid
+        Should.equal version roots.Version
+        // COM 工作没有搬到调用线程上：仍在那条固定 STA 线程
+        Should.equal false (staThread = callerThread)
+
+        let now = Report.procIds "acad"
+        Report.line2 output "进程" "acad" (sprintf "%A → %A" (Set.toList before) (Set.toList now))
+        Should.equal before now
+
+        Report.conclusion output "通过：Task 可 await，COM 仍在固定 STA 线程，结果与同步一致，acad 没增没减"
+
+    [<Fact>]
+    member this.``Application 模块 异步 GetApplicationAsync 对非 acad PID 也拒接``() =
+        Report.title output "Application 模块：GetApplicationAsync 对非 acad PID 也拒接，且不排队"
+
+        let selfPid = Environment.ProcessId
+        let images = [ "WINWORD"; "EXCEL"; "POWERPNT"; "acad" ]
+        let before = images |> List.map(fun image -> image, Report.procIds image)
+
+        // checkPid 不合格时连 STA 队列都不用排，直接交回已完成的 Task
+        let pendingTask = AutoCADHost.Application.GetApplicationAsync selfPid
+        Report.line output "自测 PID" (sprintf "%d（本测试程序，不是 acad）" selfPid)
+        Report.line output "Task 已完成" (string pendingTask.IsCompleted)
+        Should.equal true pendingTask.IsCompleted
+
+        let work =
+            task {
+                let! appResult = AutoCADHost.Application.GetApplicationAsync selfPid
+                let! rootsResult = AutoCADHost.Application.GetApplicationWithRootsAsync selfPid
+                return (appResult, rootsResult)
+            }
+
+        let appResult, rootsResult = work.GetAwaiter().GetResult()
+
+        let message =
+            match appResult with
+            | Error text -> text
+            | Ok _ -> "Ok（不该发生）"
+
+        Report.line output "Application" message
+        Report.line
+            output
+            "一步到位"
+            (match rootsResult with
+             | Error text -> text
+             | Ok _ -> "Ok（不该发生）")
+
+        Should.equal true (message.Contains "不是正在运行" && message.Contains "绝不新建")
+        Should.equal true (
+            match rootsResult with
+            | Error text -> text.Contains "绝不新建"
+            | _ -> false
+        )
+
+        for image, ids in before do
+            let now = Report.procIds image
+            Report.line2 output "进程" image (sprintf "%A → %A" (Set.toList ids) (Set.toList now))
+            Should.equal ids now
+
+        Report.conclusion output "通过：异步负例直接给已完成的 Task 并拒接，四家进程一个没起、一个没关"

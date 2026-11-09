@@ -18,6 +18,7 @@
 namespace AutoCADHost
 
 open System
+open System.Threading.Tasks
 open Autodesk.AutoCAD.Interop
 open OsHost
 
@@ -181,6 +182,23 @@ module Application =
         match checkPid pid with
         | Error message -> Error message
         | Ok() -> Sta.run(fun () -> findOnSta pid |> Result.map fst)
+
+    /// byPid 的异步版（按 .NET 命名约定加 Async 后缀）：功能完全相同，但不阻塞调用方。
+    /// checkPid 不合格就直接交回一个已完成的 Task（连 STA 队列都不用排）；合格才把
+    /// findOnSta 排进 OsHost.Sta.runAsync 那条**固定 STA 线程**，COM 对象仍只在那里创建。
+    /// await 之后要用这个 RCW，请包一层 OsHost.Sta.run；要纯数据用下面的
+    /// GetApplicationWithRootsAsync，它的现场字段跨线程直接读是安全的。
+    let GetApplicationAsync (pid: int) : Task<Result<AcadApplication, string>> =
+        match checkPid pid with
+        | Error message -> Task.FromResult<Result<AcadApplication, string>>(Error message)
+        | Ok() -> Sta.runAsync(fun () -> findOnSta pid |> Result.map fst)
+
+    /// 配套的一步到位异步入口：Application + 全部 COM 根对象 + 现场读数。
+    /// 挂回与读值都在同一条 STA 线程上做完，免得异步链被同步的 rootsOf 截断。
+    let GetApplicationWithRootsAsync (pid: int) : Task<Result<ApplicationRoots, string>> =
+        match checkPid pid with
+        | Error message -> Task.FromResult<Result<ApplicationRoots, string>>(Error message)
+        | Ok() -> Sta.runAsync(fun () -> findOnSta pid |> Result.bind rootsOnSta)
 
     /// 主函数之二：一步拿到 Application + 全部 COM 根对象 + 现场读数。
     /// 这是「给 PID，取 Application 和其他根对象」的常用入口。
