@@ -84,3 +84,4 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -method "*关键字*" -noColor -showLi
 - 源文件 UTF-8 + BOM、CRLF；子进程输出中文先设 `Console.OutputEncoding <- UTF8`。例外：`AcadMgdHost/test/run.cmd` 纯 ASCII / CRLF / **无 BOM**。
 - 递归扫跳过 `.` 开头 / `.idx_cache` 缓存目录 / `~$` 锁文件。
 - 项目根已 `git init`（`54db328`），用 git 快照回退，不再用带时间戳的备份副本。
+- 外部调用方（如 `dotnet fsi` 直接 `#r` 引用输出目录 DLL）实测：MTA 线程也能调 `GetApplicationAsync`，库自建 STA；`Task` 出来时 `IsCompleted=false`。**返回的 `AcadApplication` 是 `System.__ComObject`，不可序列化、模型读不出内容** —— 给大模型 / 工具层消费要走 `GetApplicationWithRootsAsync`（纯数据）或 `describeByPid`（文字）。简单属性在 MTA 裸读也能封送成功（3ms），但复杂 COM 操作仍回 `Sta.run`。`dotnet fsi` 从 stdin 执行完固定返回 1，是收尾码不是失败。
