@@ -23,10 +23,14 @@
     <Compile Include="GeneralAppInfo.fs" />
     <Compile Include="Address.fs" />
     <Compile Include="ProcHost.fs" />
+    <!-- 读文本：BOM 优先 + 无 BOM 的 UTF-8/GBK/ASCII 歧义判定；短名称注册也在这一份 -->
+    <Compile Include="TextFile.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Update="FSharp.Core" Version="10.1.403" />
+    <!-- GBK(936) 在 .NET Core / .NET 5+ 上要靠代码页 provider 才取得到 -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.0" />
   </ItemGroup>
 
 </Project>

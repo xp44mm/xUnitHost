@@ -250,6 +250,32 @@ module Win32 =
             GetWindowThreadProcessId(hwnd, &pid) |> ignore
             if pid = 0u then None else Some(int pid)
 
+    /// SW_RESTORE = 9：最小化的窗口还原出来（只 ShowWindow 不还原，切过去还是最小化）
+    [<Literal>]
+    let SwRestore = 9
+
+    [<DllImport("user32.dll")>]
+    extern bool ShowWindow(nativeint hwnd, int cmdShow)
+
+    [<DllImport("user32.dll")>]
+    extern bool SetForegroundWindow(nativeint hwnd)
+
+    /// 把这只进程的主窗口还原并切到前台，返回前台切换是否成功。
+    /// Windows 有前台锁（用户正在别的程序里输入时不许抢），失败是正常结果、不是错误；
+    /// 调用方按返回值决定要不要提示「请自己点任务栏」。
+    let bringToFront (pid: int) : bool =
+        try
+            let proc = System.Diagnostics.Process.GetProcessById pid
+            let hwnd = proc.MainWindowHandle
+
+            if hwnd = IntPtr.Zero then
+                false
+            else
+                ShowWindow(nativeint hwnd, SwRestore) |> ignore
+                SetForegroundWindow(nativeint hwnd)
+        with _ ->
+            false
+
 /// 异常归因：COM 异常外层多是无信息量的 "Exception from HRESULT: 0x..."，有用的在里层
 [<RequireQualifiedAccess>]
 module Errors =

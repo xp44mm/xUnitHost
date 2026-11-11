@@ -1,92 +1,65 @@
 ﻿# xUnitHost 项目长期笔记
 
 ## 铁律
-真机 Word / Excel / PowerPoint / AutoCAD 上干活，先读 `.workbuddy/skills/office-host-collaboration/SKILL.md`（含 `references/api.md`、`references/gotchas.md`）。
-顺序固定：**写 F# Fact → `dotnet build xUnitHost.slnx -v q`（0 警告 0 错误）→ 单跑 `-m "*关键字*" -showLiveOutput` → 才动真机 → 汇报**。代码留项目当记录，副作用靠它复现，不写一次性脚本。
-汇报四段：做了什么 / 直接贴 Fact 的 `output`（去 `[OUTPUT]` 前缀与类名）/ 留下的代码与 Fact 名 / 现场进程是否干净。
+- 真机 Word/Excel/PPT/acad 干活前，先读 `.workbuddy/skills/office-host-collaboration/SKILL.md`（含 `references/api.md`、`gotchas.md`）。
+- **acad 驱动只用 `AutoCADHost.Task` 的现成函数**（命令等 EndCommand、LISP 等 EndLisp、按 PID 挂回），不许手拼 `SendCommand` / 自订阅事件。
+- 顺序：**写 Fact → `dotnet build xUnitHost.slnx -v q`（0 警告 0 错误）→ 单跑 `-m "*关键字*" -showLiveOutput` → 才动真机 → 汇报四段**（做了什么 / 贴 output / 代码与 Fact 名 / 现场进程是否干净）。代码留项目当记录。
+- 用户平时开着 Office/acad：只跑 `-m`，别跑 `-a`；从零起实例的 Fact 用 `requireClean`，不干净就 `Assert.Skip`，**绝不为跑通去关用户实例**。
 
-## 七个项目
-`OsHost`（OS 层 + `Address.fs` 进程地址 + `ProcHost.fs` 起关命令）、`WordHost` / `ExcelHost` / `PowerPointHost` / `AutoCADHost`（四家 COM host）、`AcadMgdHost`（accoreconsole 插件，netstandard2.0，只引 acdbmgd + accoremgd，不走 COM）、`xUnitHost`（xunit v3 测试）。
-**往现有项目加文件随时可以；不许私自新建项目**（须先说明理由问用户）。
+## 项目与命令
+`OsHost`（OS 层 / `Address` / `ProcHost` / `GeneralAppInfo` / `TextFile`）、`WordHost`、`ExcelHost`、`PowerPointHost`、`AutoCADHost`、`AcadMgdHost`、`xUnitHost`（xunit v3，**直接跑 exe，不能用 `dotnet test`**）。**不许私自新建项目**。
 
-## 代码位置
-| 东西 | 位置 |
-|---|---|
-| OS 层 / 进程地址 / 起关命令 | `OsHost/{OsHost.fs,Address.fs,ProcHost.fs,GeneralAppInfo.fs}` |
-| 四家 COM host（取实例/认自己/收尾/`Security`） | `WordHost` / `ExcelHost` / `PowerPointHost` / `AutoCADHost` |
-| 按 PID 挂回 acad 的 COM 根对象 | `AutoCADHost/Application.fs`：`byPid` / `byPidWithRoots` / `rootsOf` / `describeByPid` / `boundary`；**异步** `GetApplicationAsync` / `GetApplicationWithRootsAsync`（`Task<AcadApplication>` / `Task<ApplicationRoots>`，失败即 faulted Task 不包 Result，走 `OsHost.Sta.runAsync`）+ `OsHost.Com.runningEntries`（只在只有 PID 时枚举 ROT 兜底）。COM 公寓不变：await 后用 RCW 仍 `Sta.run`。验证 `xUnitHost/AcadApplicationTest.fs`（`-m "*按 PID*"` / `-m "*异步*"` / `-m "*比对*"`）。黑板比对实证：只给 PID 够用，HWND / EXE / 版本可凭 PID 现查，图纸与采集时间是快照；.NET 托管 DLL 不进 `Process.Modules`，插件自报的 DLL 路径只能校磁盘文件 |
-| AutoCAD 就绪订阅 / 动作 Task（替代撞忙重试） | `AutoCADHost/Ready.fs`（`Rule` 纯判定器可注入假时钟 + `Gate` 订阅 `EndOpen`/`NewDrawing`/`EndCommand`/`EndModal`，`WhenReadyAsync` / `SubmitAsync` / `Subscriptions` / `Notices` / 退订）+ `Application.fs` 的 `executeAsync` / `executeAtPidAsync`（16:3x 按用户伪代码重写成 TCS 完成信号驱动，见下一行）。**`Ready.fs` 须排在 `Application.fs` 之前编译**。判据：连中 5 次 `AcadState.IsQuiescent` + 距最近动静静置 1.5s；事件只把计时归零，最终看 AutoCAD 自己 quiescent；事件挂不上就退化成纯观察并如实报 `Subscriptions`。**15:3x 真机实测：此路未能挡住 `RPC_E_CALL_REJECTED`** —— 四条事件确实都挂上，但 `WhenReadyAsync` 在 `Notices=[]` 时也放行（判据只含 IsQuiescent 连中 + 静置，通知不是必要条件），且 `SubmitAsync` 管不到 action lambda 内部连续 COM 调用，`Documents.Add().Name` 的 `get_Name()` 被拒。`WhenReadyAsync` / `SubmitAsync` **别当防忙方案用**（离线自测 `-m "*就绪订阅*"` 只验判定规则）；但 `Ready.Gate` 的事件订阅与退订本身有效，16:3x 已拿来给新 `executeAsync` 供完成通知（见下一行）。真机画圆现走 `xUnitHost/AcadApplicationTest.fs` 末尾用户给开头的**直接 Task 版**（`-m "*画一个圆*"`）：`GetApplicationAsync pid` → 每个 COM 调用 `Sta.run` + 外层 `Busy.retry 30000` 兜底，`Add()` 与读属性 / 画圆与读回**拆开**避免重试重复写，只在 `Documents.Add()` 的临时图里画、不保存 `Close(false)` 关掉；**5 次连跑 0 failed，每轮真撞 1–2 次忙并被接住**（报告打「忙重试 N 次」）。坑：Close 之后立刻枚举 `acad.Documents` 会抛非忙异常，收尾只做 Close、由后面的图纸数 / 活动图名证明关掉了；xunit v3 能发现返回 Task 的 F# `task { }` 测试方法。**16:1x 更正**：用户已把末尾那条 Fact 换成「连画 10 个图形逐笔看是否被拒」的裸发探测（不包 `Sta.run` / `Busy.retry`，每笔单独 try/with），旧口径在 git `98fdcf4`；12 次跑里仅首次被拒 9 笔（`0x8001010A`），其余全过 |
-| 完成信号驱动的 `executeAsync`（16:3x 按用户 `Application.fs#214-222` 伪代码落地） | `AutoCADHost/Application.fs`：`executeAsync (action: AcadApplication -> unit) : Task<unit>`（本机恰好一只 acad 时自动定 PID，多只一律拒接）+ `executeAtPidAsync pid timeoutMs action`（显式 PID / 可给短超时，负例与验证用）。私有 `executeCoreAsync` 里**一个 `TaskCompletionSource<unit>` 就是全部状态机**：挂回 → `Ready.subscribe` → `Sta.runAsync(action)` → `Gate.WaitSignalSinceAsync(baseline, timeoutMs)` 收到 AutoCAD 完成通知才 `TrySetResult(())`（RanToCompletion）；挂回失败 / 连接点没挂上 / 动作抛错 / 超时一律 `TrySetException`（faulted，await 抛异常），`finally` 退订。订阅、发动作、退订全在固定 STA 线程，TCS 用 `RunContinuationsAsynchronously` 不让续体跑在 STA 上。`Ready.Gate.WaitSignalSinceAsync` 是新加的「**必须真收到通知**」一次性等待器（基线之后、动作执行期间就送达的也算，不漏），与只看 `IsQuiescent` 的 `WhenReadyAsync` 根本不同。**真机实证** `-m "*完成信号*"`：空动作 1.5s 内 `已收到 []` → `TimeoutException` faulted；`Documents.Add()` 后 860–1007ms 收到通知 → RanToCompletion，3 次连跑稳定，临时图 `Close(false)` 不保存关掉。这第一次坐实 **COM 事件在本项目固定 STA 线程上确实送达**（此前只验过「四条挂得上」）。旧 `executeAsync(pid, Gate→app→Task)` / `executeOnceAsync` 已删除，负例 Fact 改打 `executeAtPidAsync` |
-| 读取同步/异步的边界（17:0x，用户问「读取是否需要异步」） | **同步就行，不需要 Task**：`xUnitHost/AcadApplicationTest.fs` 新 Fact（`*读取*`，名字含「完成信号」故 `*完成信号*` 现命中 2 条）实证：完成通知**到达后**，同步 `Sta.run` / 异步 `Sta.runAsync`+`let!` / 裸读三者读到的 `(图纸数, 图名, 版本, 实体数)` 完全相同；通知**未到**时同步读 3/3 抛 `0x8021003C 无法获取 Document 对象`。COM 读值本是一次同步 RPC，`Sta.run` 是**固定 STA 公寓要求、不是异步**，异步只解决「不阻塞调用方」；这条链里真正需要异步的只有 `executeAsync` / `WaitSignalSinceAsync` **等 AutoCAD 完成通知**（决定能不能读的是时机）。完成通知刚到仍有短忙窗（同步读 236/257ms 含一次 `Busy.retry` 200ms 休眠）→ **读值仍要 `Busy.retry` 兜忙**，与 Task 无关。两个现成读数入口 `describeByPid`（同步）/`GetApplicationWithRootsAsync`（异步）11 行稳定字段一致；库代码未改，日常读值用同步版即可 |
-| 会话层（地址、指纹、两种模式） | `xUnitHost/Session.fs`（前部） |
-| 报告 / 认人 / 忙重试 | `xUnitHost/Common.fs`：`module internal Report` / `Doc` / `Busy` |
-| 批量转换底座 | `xUnitHost/ConvertCore.fs`（Item / Outcome / Paths），前部 |
-| 批量分派 + 事后核对 | `xUnitHost/Convert.fs`（words / books / shows / all / readWordText / readBookPrint / readPptPrint / canDelete / **booksAttached**），前部 |
-| 升级实现（各自 host 库末尾，形状对称） | `WordHost/{DocIO.fs,DocUpgrade.fs}`、`ExcelHost/{BookIO.fs,XlsUpgrade.fs}`、`PowerPointHost/{PptIO.fs,PptUpgrade.fs}`（`pptUpgrade`，`convert` 别名） |
-| 真目录入口 | `xUnitHost/ConvertTest.fs` 末尾两条 Fact（`module internal RealFolder`），靠 `XUNITHOST_CONVERT_DIR` 叫起 |
-| 常驻 Excel 挂回 + 逐份推进 | `xUnitHost/AttachedConvertTest.fs`（`module private Attached` + 3 条 Fact），排在 ConvertTest 之后 |
-| P0 安全开关验证 | `xUnitHost/ConvertSafetyTest.fs`（`-m "*安全开关*"`） |
-| 其它验证 | `CommandTest.fs`（`*派发*`）、`ProcRx.fs` + `RxCommandTest.fs`（`*Rx 两条命令*`）、`PptUpgradeTest.fs`（`*pptUpgrade*`）、`SecondProcessTest.fs`、`DnTest.fs` / `PriceTest.fs` / `DocSyncTest.fs`（真表靠 `XUNITHOST_DN_DIR`） |
-| accoreconsole 插件 | `AcadMgdHost/{Commands.fs,AssemblyInfo.fs,test/run.cmd}`；`XH_HELLO` / `XH_DB` |
-
-## 两种模式
-- **独立（方式一）** `Host.execOnce` / `execOnceQuery`：一步做完、只读一个值；开一次、做完关掉。
-- **合作（方式二）** `openSession` → `execByAddress` → `close`：多步、每步看上一步结果、跨进程交接。
-- 地址 = `种类:pid:进程启动毫秒:最后保存毫秒:路径指纹:归属`；每步用 `exec` 返回的**新地址**；`openSession` 可新建，`resolve` **绝不新建**；只关 `Owned=true` 的，用户手上的实例一个字不动。
-
-## 黑板模式
-- 插件（WordVSTO / ExcelVSTO）把当前实例抄到黑板（采集时间 / PID / ROT 名 `!ExcelVSTO.Instance.<pid>` / HWND / EXE / 文档）；本侧只按 info 挂回那一只实例读写，**不创建不销毁**。黑板文本里的采集时间行 / HWND 行都不解析：不是进程的属性。
-- `OsHost/GeneralAppInfo.fs`：`GeneralAppInfo`（**只 4 项** `Image`/`Pid`/`Rot`/`ExePath`；`create`/`describe`/`verify`/`defaultAcquire`/`attachWith`/`attach`）+ `GeneralDocInfo`（只作报告数据）；库不认 Office 类型、不解析文本、不新建不 Quit。`OsHost.Com.runningAt` 按 moniker 名取 ROT（不枚举、不退回 GetActiveObject、不新建）。
-- 四家 `Host.SelfImage`（Word `WINWORD`、Excel `EXCEL`、PPT `POWERPNT`、CAD `acad`）+ `Host.GetApplication(info)` 走 `GeneralAppInfo.attach`（强转 + pid 核对），失败一律 Error，绝不新建/Quit/改显示开关。
-- **`GeneralIdentity` 已整份删除**（11-08，`b567007`）：用户口径「只用来识别进程」→ 表里只留找到进程所需的现场值，`Name`（显示名）/ `Tag`（种类标记）与 `ensureTag` 一起撤掉；进错入口改由 work 强转失败或 pid 不符兜住（也是明确 Error）。
-- **文档级交接检查已取消**（13:51）：`checkDoc` 两路都删，`DocName`/`DocPath` 只收数据不参与判断。
-- **`GeneralAppInfo` 只装认进程的字段**（11-08，`0dba505`）：文档名/路径搬进同文件的新记录 `GeneralDocInfo`（`Name`/`Path`/`create`/`empty`/`describe`），纯报告数据。文本源用 `BlackboardText.docOfText` 另取。
-- **`Hwnd` 与 `borrowProcess` 已删**（11-09，`00cb85a`）：窗口句柄属「谁当时开了什么」，借用进程后必换，留着是摆设 → 表里与 `verify` 里都撤掉。文本里的 `HWND` 行不再解析。`Attached.borrow` 变成恒等函数（保留调用点，名字仍表「借用那只常驻进程」）。
-- **`CapturedMs` 已删**（11-09，`349f915`）：采集时刻是黑板抄录动作的时间，不是进程属性 → 表里撤掉，连带 `verify` 的「缺采集时间」「进程号被复用（靠 Proc.startedMs 比采集时刻）」两条检查、`BlackboardText.parseClock` 一起删；`create` 收 4 个参数。插件文本里那行「采集时间」照印但不解析（Fact 用「抽掉这行结果不变」验证）。`verify` 现在只比 PID 有效 / 进程名非空 / PID 存活 / EXE / ROT 名后缀。
-- 旧 `AppInfo.fs`（`AppKind`）已 Obsolete 后整份删除，旧实现在 `19d7d0c` 之前；`GeneralBridge` 与旧对照 Fact 已删。
-
-## 测试风格
-- 一个类 + 构造函数拿 `ITestOutputHelper`；Fact 写 `member this.``中文一句话``()`，不用模块级 `let`。
-- 断言 `Should.equal 期望 实际`（`open FSharp.xUnit`），其余 `Assert.*`。
-- 报告就是写进 `output` 的那份：`Report.title` → `line` → `conclusion`，一行一个真实值，别写「成功」两个字；断言夹在报告行之间。
-- 必须带 `-showLiveOutput`，否则 xunit 收走 output。测试串行（`xunit.runner.json`）。xunit v3 **不能用 `dotnet test`**，直接跑 `xUnitHost/bin/Debug/net10.0/xUnitHost.exe`。
-- `-method` 通配符**只允许在开头/结尾**：`*真目录*清点*` 报 `Filter expression ... is not valid`。
-
-## 命令
 ```bash
 dotnet build xUnitHost.slnx -v q
-xUnitHost/bin/Debug/net10.0/xUnitHost.exe -method "*关键字*" -noColor -showLiveOutput
+xUnitHost/bin/Debug/net10.0/xUnitHost.exe -method "*关键字*" -noColor -showLiveOutput   # 通配符只许在首尾
 ```
 
-## 转换规则（默认，不用问）
-`.doc` 无宏→`.docx`、有宏→`.docm`；`.xls` 无宏→`.xlsx`、有宏→`.xlsm`；`.ppt` 无宏→`.pptx`、有宏→`.pptm`（保 VBA）。判不出宏就失败、原件保留。判宏只用 `HasVBProject`（bool，不执行宏）或 OLE/ZIP 目录流（`word/vbaProject.bin`、`xl/vbaProject.bin`），绝不运行宏。
-**转一份、读回比一份**（正文 / 格子值 / 幻灯片文字），不一致判失败、原件保留；只删 `canDelete`（「转了」/「已有·一致」）的原件，删前先备份到目录外。
-真目录闭环（`RealFolder`）：① 完整备份到**目标目录之外**（`<root>-bak<戳>`，可复用续跑）② 重名让位 `X-bak<戳>.docx` ③ 分块转换（`CHUNK` 默认 200）④ 每份读回核对 ⑤ 只把核对通过的原件送**回收站**（`Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile` + `RecycleOption.SendToRecycleBin`，不用 `File.Delete`），`BATCH` 默认 10。失败的原件一律保留。
+## 四个挂回入口（只认这些）
+| 程序 | 入口 | 闸门 / 注意 |
+|---|---|---|
+| Word | `WordHost/WordTask.fs` → `WordTask.GetApplicationAsync info`（Task 版，2026-11-11 从 `Host.GetApplication` 挪来，**唯一**） | `GeneralAppInfo.verify` 纯查进程表、同步 faulted；`pidOf` 要 `ActiveWindow` 上溯 `OpusApp`，没开文档返回 None（不反驳）。Fact `-m "*通用参数表*"`，真机 `XUNITHOST_WORD_PID` |
+| Excel | `ExcelHost/ExcelTask.fs` → `ExcelTask.GetApplicationAsync pid`（**唯一**，info 版 11-10 已删） | `Application.Hwnd`→PID；Fact `ExcelAttachTest.fs`，真机 `XUNITHOST_EXCEL_PID` |
+| PPT | `PowerPointHost.Host.GetApplication info`（`: Result<_,_>`） | 只做方式一，无会话层 |
+| acad | `AutoCADHost/Task.fs`（`module AutoCADHost.Task`）：`GetApplicationAsync pid` / `commandAsync` / `sendCommandAsync` / `modalAsync` / `openDrawingAsync` / `sendLispAsync`(不等) / `sendLispAndWaitAsync`·`runLispAsync`·`runLispFileAsync`(等 EndLisp) | 参数收 `IAcadApplication`/`IAcadDocument`；`EventPair` 不认 COM，`AcadBeginEnd` 只剩接线；**`Ready.fs` 已废弃**（IsQuiescent 挡不住 RPC_E_CALL_REJECTED） |
 
-## P0 安全开关（2026-11-07）
-- Word 用 `Documents.OpenNoRepairDialog`（抑制修复框）+ `ConfirmConversions=false`；Excel `Workbooks.Open` 传满参数、末位 `CorruptLoad=xlNormalLoad`、`AskToUpdateLinks=false`；PPT 保持 `Presentations.Open(..., WithWindow=msoFalse)`。
-- 三家 `Host.fs` 各公开 `module Security`（`apply`/`restore`），quieten 设 `msoAutomationSecurityForceDisable`(3)，用完恢复原值。
-- 按类型分轮：`XUNITHOST_CONVERT_KIND=doc|xls|ppt`（`Paths.Kind` / `filterByKind`），别一轮混跑三类。
-- **kill 型 COM 超时看门狗未做**：COM 跑固定 STA，按份中断要 `Host` 暴露本次 pid 并配重试/重启，风险高于收益；改用 `CHUNK=20` 缩影响面 + 逐份推进。
+- 判定链 `Host.checkPid / findOnSta / unwrap`、`matchApp` 已公开，留在各 `Host.fs`。
+- 黑板（VSTO 抄 PID/ROT/EXE/文档）只挂回那一只，不新建不 Quit。**黑板常量写死在测试文件里**（`BlackboardText.ofText`），用户换进程/重开文件必须同步改（11-10 遇过 28884→14052）。
+- 独立 `Host.exec*`（要求本机没有同类进程）vs 合作 `openSession`→`execByAddress`→`close`；每步用新地址，绝不自拼；只有 `Owned=true` 才真关。
+- 改用户**已打开的真表/真文档**：备份到项目目录外 → 逐行核对现场 → 只改点名处 → `Save()` → 读回 → 另用 zip+XML 独立核磁盘字节。
 
-## 常驻 Excel 挂回式通道（.xls 只走这条）
-- 用户架构：Excel 由 ExcelVSTO 插件常驻，本侧只用 `ExcelHost.Host.GetApplication(info)` 挂回，**不新建 / 不 Quit / 不 kill / 不 requireClean**；只逐份开→升级→保存→关自己那本（`Convert.booksAttached`，**绝不用 `CloseAllWorkbooksWithoutSaving`**）。
-- **借用进程口径**：表里压根没有窗口句柄 / 采集时刻这些「谁当时开着什么、什么时候抄的」字段，参数表原样交给 `GetApplication` 即可（11-09 起 `Attached.borrow` 只是恒等函数，保留调用点表意）。用户话：「你只管你自己的 excel 文件，其他文件的 hwnd 你不校验，你只是借用 excel 进程」。别断言用户工作簿数量。校验只核 进程名 / PID 存活 / EXE / ROT 名后缀。
-- 三个实战坑：① Excel 打开老 .xls 会**改写原件字节**（683520→684032，md5 变）→ 每份失败/送走前从备份还原；② 常驻实例被反复挂回会劣化（曾卡 123 秒），**卡住就重启 Excel 再来**，同一份在新实例上 14 秒通过；③ 老 .xls 若是共享工作簿/带修订历史，SaveAs 被拒（报错原文为准）。
-- 逐份推进器 `-m "*逐份升级*"`：一份一送，成功即把原件送回收站；失败打印归类原因、记 `逐份-失败清单.txt`（可直接当 `XUNITHOST_CONVERT_SKIP`）、接着下一份；同一原因连续 N 次或常驻 pid 消失才停。每份计时写 `逐份-进度.log`。开跑前只关「本次队列里」上次残留的工作簿。
-- **弹窗策略（2026-11-07 17:3x 用户定）**：不再指望躲掉所有对话框 —— 让界面露出来，卡住就把 Excel 切到前台催人处理。实现：`Attached.bringToFront pid`（`Microsoft.VisualBasic.Interaction.AppActivate`，只激活窗口，不杀进程/不动文件）；默认 45 秒无进展就切前台并写提示，之后每 45 秒再催（`XUNITHOST_CONVERT_POPUP_HINT`，旧名 `XUNITHOST_CONVERT_TIMEOUT` 仍认）；开跑时前置一次（`XUNITHOST_CONVERT_FOCUS=0` 关）；报告打印「催前台 N 次」。**卡住不判失败**，等用户点掉弹窗后 COM 自己返回。
-- `C:\崔胜利` 战果：`.doc/.ppt` 全量已转；`.xls` 从 1215 份推进到**剩 11 份**（另 6 个 `.idx_cache/src/*.xls` 属缓存，本就不转）。11 份失败分五类：共享工作簿 1、宏判定 2（`0x800A03EC` / Excel 4.0 宏表）、内容指纹不匹配 6（新文件字符一律更多，疑似公式重算，未证实）、`0x800A03EC` 1、被占用 1。全部原件保留、未删未改，等用户决定 A/B/C/D。
+## 测试风格
+一个类 + 构造函数拿 `ITestOutputHelper`，Fact 是成员方法 `member this.``中文一句话``()`，纯函数放模块里且在类之前。报告写进 `output`：`Report.title` → `line` / `line2 output 标签 子标签 内容` → `conclusion`，一行一个真实值。断言 `Should.equal 期望 实际`（`FSharp.xUnit`）。必须 `-showLiveOutput`。
+
+## Excel / XLL 的坑
+- **`Range.Formula` 会给自定义函数补 `@`，`Formula2` 不补**；动态数组必须 `Formula2` 才能 spill。批量写公式一律 `Formula2`。
+- XLL 名：`Evaluate`/公式栏不带前缀，磁盘 XML 才存 `_xll.`；数组函数 = 单锚点 + `<f t="array" ref="C7:C9">`。
+- `-2146826259` / `#NAME?` 往往只是**那个 Excel 进程没加载插件**：先 `Evaluate` 探测。
+- 起 Excel 用 `ExcelHost.Host.GetOrCreateApplication()`（会把 XLL 一起加载），别自己 `Com.create` 隐藏实例；拿到 app 先 `Evaluate` 探 `空气体积成分` / `gasMoleEnthalpy`。
+- **`0x800A03EC` / 静默 `#NAME?` 常见于以 `=` 开头的说明文本**（`Formula` 与 `Value2` 都一样，11-11 D11 踩过）。写完扫一遍 `Range(addr).Text` 有无 `#` 错值（整块取会抛，逐格取）。
+- 批量写：先收集 (地址,值) → 校验现有非空地址都在清单内 → 统一落笔；spill 锚点写前 `ClearContents`。
+- **同会话起不出两本同名工作簿**：`Workbooks.Open` 第二个同名文件静默失败（返回 null、`Worksheets.Count` 为 0）。先 `File.Copy` 成带来源标记的副本（`BurnerCatalogTest.Item.Alias`）。
+- `Workbooks.Add()` 偶发 `0x800AC472` → 局部重试；加表先 `Worksheets.Add()` 再 `Move(Missing, 目标表)`，`Move` 包 try。
 
 ## 约定与坑
-- 用户平时开着 Word / Excel / acad：需要从零起实例的 Fact 开头 `requireClean`，不干净就 `Assert.Skip`，**绝不为跑通去关用户实例**。
-- 别拉起用不到的程序：只跑 `-m` 相关 Fact，别跑 `-a`；AutoCAD 显式 `XUNITHOST_LAUNCH_ACAD=1` 才起。
-- COM 差异：Word Open/SaveAs 是 `obj&`，Excel 是 `object`，**PowerPoint 是强类型按值**；`Presentation.Close()` 无参；`HasVBProject` 是 `bool`；`DisplayAlerts <- ppAlertsNone`。
-- Quit 异步：`Gone=true` 后进程可能还有半拍，用 `Proc.waitGone` 复核；`finally` 只 kill 自己起的 pid。
-- Rx 版：退出检测放 **close** 一侧，命令执行前订阅 `Process.Exited` + 1000ms 轮询兜底。
-- accoreconsole：`Console.Out` 被重定向到 `%TEMP%ccc*.tmp`，插件另按 `ACADMGDHOST_LOG` 写日志。
-- 源文件 UTF-8 + BOM、CRLF；子进程输出中文先设 `Console.OutputEncoding <- UTF8`。例外：`AcadMgdHost/test/run.cmd` 纯 ASCII / CRLF / **无 BOM**。
-- 递归扫跳过 `.` 开头 / `.idx_cache` 缓存目录 / `~$` 锁文件。
-- AutoCAD **0 份图纸**时 `ActiveDocument` 抛 `0x8021003C 无法获取 Document 对象`；基线用 `Documents.Count`，画东西前先 `Documents.Add()`。`ModelSpace` 的 `Add*` 方法在 `IAcadModelSpace` / `IAcadBlock`（`AcadModelSpace` 本身只是聚合接口）；点参数是 `box float array`，`AddText` 第三个参数是字高 Double。
-- 连续裸发 COM 写调用会被消息筛选器挡回，码 `0x8001010A RPC_E_SERVERCALL_RETRYLATER`（消息筛选器显示应用程序正在使用中），与 `0x80010001` / `0x80010105` 同在 `Busy.busyHResults` 里；被拒的实体确实没画进去（`ModelSpace.Count` = 成功笔数）。裸发 10 笔实测 12 次里 1 次被拒 9 笔，其余全过 —— 忙是偶发但真实，别把「这次没被拒」当机制可靠。
-- 项目根已 `git init`（`54db328`），用 git 快照回退，不再用带时间戳的备份副本。
-- 外部调用方（如 `dotnet fsi` 直接 `#r` 引用输出目录 DLL）实测：MTA 线程也能调 `GetApplicationAsync`，库自建 STA；`Task` 出来时 `IsCompleted=false`。**返回的 `AcadApplication` 是 `System.__ComObject`，不可序列化、模型读不出内容** —— 给大模型 / 工具层消费要走 `GetApplicationWithRootsAsync`（纯数据）或 `describeByPid`（文字）。简单属性在 MTA 裸读也能封送成功（3ms），但复杂 COM 操作仍回 `Sta.run`。`dotnet fsi` 从 stdin 执行完固定返回 1，是收尾码不是失败。
+- COM 差异：Word Open/SaveAs 是 `obj&`，Excel 是 `object`，**PPT 强类型按值**；`Presentation.Close()` 无参；`DisplayAlerts <- ppAlertsNone`。
+- 源文件 UTF-8 + BOM、CRLF；子进程输出中文先 `Console.OutputEncoding <- UTF8`；例外 `AcadMgdHost/test/run.cmd` 纯 ASCII 无 BOM。
+- **`.lsp` 必须 GBK + CRLF**（AutoCAD 2020 R23.1 按本地 ANSI 读，UTF-8 带 BOM 的 `(load ...)` 直接失败）；生成前检查 GBK 字节不含 `"` `\` `(` `)`。
+- **`(getvar "PID")` 在 R23.1 返回 nil**；证明跑在哪只 acad 用 `(getvar "DWGNAME")` / `ACADVER`。写文件一律 `(vl-princ-to-string …)`，别用 `itoa`（nil/实数报错 → 0 字节文件 + 文件锁）。
+- **LISP 有事件**：`BeginLisp`/`EndLisp`/`LispCancelled`；`(progn …)` 内嵌 `(command …)` 的 Begin/EndCommand 先走完、**最后才 EndLisp** —— 等「跑完」只等 EndLisp。`EndLisp` ≠ 成功（求值错误只打印在命令行），要数据让代码自己写结果文件。
+- `task` CE 里 `let _ = xxxAsync` = fire-and-forget（「直线没画上」的根因），一律 `let!` / `do!`。
+- 递归扫跳过 `.` 开头 / `.idx_cache` / `~$`；项目根已 `git init`。
+- 读来路不明的文本一律 `OsHost.TextFile.decodeAllLinesAsync`（`lines` / `dec`），别 `File.ReadAllLines`。
+
+## 焦炉煤气燃烧计算书（`C:\崔胜利\群有\中冶南方都市环保\焦炉煤气燃烧计算书.xlsx`）
+细节见 `2026-11-10.md` / `2026-11-11.md`，只留定稿口径：
+- **定值**（`焦炉煤气`!E2:E11，用户定的保守自洽）：4 kPa / 4000 kcal/Nm³ 取下限；成分取中值、N2 平衡到 100%（N2 6.45 / CO2 2.5 / CO 6.5 / H2 57 / CH4 24.5 / O2 0.55 / C2+ 2.5）；干基。别抄区间端点。
+- **表序**：焦炉煤气 → 需要加热的烟气参数 → 烟气成分计算 → 烟气吸热量计算 → 补热燃烧计算 → 燃烧器选型。成分表是唯一口径。
+- **烟气成分**（`GasCompositionTest.fs`，`XUNITHOST_GAS_COMPOSITION=1`）：仙桃 100760 Pa/16.5℃/80% → α=**1.67323**；湿基 H2O 15.635 / O2 7.593 / N2 71.821 / CO2 4.951；干基 9.00 / 85.13 / 5.87。α 不能抄天然气燃烧器的 1.15。
+- **吸热**（`GasHeatTest.fs`，`XUNITHOST_GAS_HEAT=1`）：57000 Nm³/h × 175→500℃ = **637.45 万大卡/hr**；业主 530 **别改**。F/G 列有 NIST Shomate 独立复算（偏差 −0.35%）。
+- **放热量口径（11-11 用户定稿）**：`C84 = C80 − C79` = LHV − 产物终温显热；T_ad 二分**已删**。α=1.15 是补燃自身助燃空气，与「第一股烟气含氧 8~10%」**互不相干**，别互相反推。现表：LHV 16747.2、显热 3995.84、放热 12751.355 kJ/Nm³（3045.609 kcal/Nm³）、煤气 2093.016 Nm³/h。Fact `-m "*去二分*"`（`XUNITHOST_GAS_TRIM=1`）。
+- **燃烧器选型**（第 6 张，`BurnerSelectTest.fs`，`XUNITHOST_BURNER_SELECT=1`）：燃料侧全活链接补热表；**不乘热效率**，散热由 `C28 裕量 1.10` 覆盖；额定负荷按 LHV 输入热功率。现表：设计 837.21 万大卡/h → 额定 920.93、额定煤气 2302.3 Nm³/h。**表已存在就地写、绝不重建**（会冲掉用户输入格与 `C76` 的 `_xll.电机额定功率(C75)`）。
+- **助燃风机**（同表 67~102 行）：`C68=C36*(273.15+C71)/273.15`、`C69=ROUNDUP(E69,-2)`；选型 16500 m³/h、4.5 kPa、60% → 轴功率 34.375 kW → 电机 45 kW；风压分项合计 4419 Pa（差 −81）。待厂家确认：`C87` 本体阻力、`C82` 管长、`C83` λ、`C85` Σζ。
+
+## 转换规则（默认不问）
+**Word 的宏一律不保留，统一存 `.docx`**（用户 2026-11-11 定）——老 `.doc` 的 VBA 工程多半被「锁定工程」保护，Word 自己 `SaveAs .docm` 也会丢（ForceDisable / ByUI / 开了 `AccessVBOM` 都试过），保宏只会白卡文件；`DocToDocm` 留着，`XUNITHOST_DOC_KEEP_MACRO=1` 才走。`.xls`→`.xlsx`/`.xlsm`；`.ppt`→`.pptx`/`.pptm`。**转一份读回比一份**；只删 `canDelete`，删前备份。
+常驻 Excel 挂回式通道（`.xls` 只走这条）：只用 `ExcelTask.GetApplicationAsync pid`，不新建不 Quit 不 kill，只关自己那本；打开老 `.xls` 会改写原件 → 失败前从备份还原；常驻实例反复挂回会劣化，**卡住就重启 Excel**。

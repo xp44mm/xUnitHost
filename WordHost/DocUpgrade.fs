@@ -32,32 +32,34 @@ module DocToDocx =
         let body () =
             doc <- DocIO.openDoc app source false
 
-            // 守卫：带宏的 .doc 存成 .docx 会把 VBA 悄悄扔掉，这单不接。
-            // 分派本该把它送去 DocToDocm，这里再挡一道，防的是漏判。
-            if DocIO.hasVba doc then
-                (target, "失败", "这份 .doc 带 VBA 宏，不该存成 .docx；原件保留")
+            // 老 .doc 里的 VBA 工程只作报告用，**不再拦路**：
+            // 2026-11-11 用户定「Word 宏不留，直接存 .docx」。
+            // 实测这类工程的宏本来也搬不走（存 .docm 后 Word 一样丢掉），拦着只会白卡文件。
+            let hadProject = DocIO.hasVba doc
+
+            exists <- File.Exists target
+
+            // 已有同名新文件：先转到临时文件，跟原件比完再删
+            stage <- DocIO.stageFor exists target
+
+            let before = DocIO.bodyText doc
+            DocIO.saveDocAs format doc stage
+            DocIO.closeDoc doc
+            doc <- null
+
+            back <- DocIO.openDoc app stage true
+            let after = DocIO.bodyText back
+            DocIO.closeDoc back
+            back <- null
+
+            let macroNote = if hadProject then "（原件带 VBA 工程，按既定口径不保留）" else ""
+
+            if before <> after then
+                (target, "失败", sprintf "正文对不上（原件 %d 字 / 新文件 %d 字），原件保留" before.Length after.Length)
+            elif exists then
+                (target, "已有·一致", "现有 docx 的正文与原件一致" + macroNote)
             else
-                exists <- File.Exists target
-
-                // 已有同名新文件：先转到临时文件，跟原件比完再删
-                stage <- DocIO.stageFor exists target
-
-                let before = DocIO.bodyText doc
-                DocIO.saveDocAs format doc stage
-                DocIO.closeDoc doc
-                doc <- null
-
-                back <- DocIO.openDoc app stage true
-                let after = DocIO.bodyText back
-                DocIO.closeDoc back
-                back <- null
-
-                if before <> after then
-                    (target, "失败", sprintf "正文对不上（原件 %d 字 / 新文件 %d 字），原件保留" before.Length after.Length)
-                elif exists then
-                    (target, "已有·一致", "现有 docx 的正文与原件一致")
-                else
-                    (target, "转了", sprintf "正文 %d 字，一字不差" after.Length)
+                (target, "转了", sprintf "正文 %d 字，一字不差%s" after.Length macroNote)
 
         // F# 不允许 try/with/finally 写在一起：结果先算出来，收尾单独做
         let outcome =
@@ -93,7 +95,7 @@ module DocToDocm =
 
         let body () =
             doc <- DocIO.openDoc app source false
-            let hadMacro = DocIO.hasVba doc
+            let hadMacro = DocIO.hasRealVba doc
 
             exists <- File.Exists target
             stage <- DocIO.stageFor exists target
@@ -133,9 +135,11 @@ module DocToDocm =
         outcome
 
 /// 统一入口：把一份 .doc 升级成新格式。
-/// 判有没有 VBA 宏 → 有宏走 DocToDocm（.docm，保宏），没宏走 DocToDocx（.docx）；
-/// 判不出来就报失败、原件保留，绝不猜「没宏」（猜错会悄悄丢宏）。
-/// 判宏和选路都收在 WordHost 里，测试项目只负责批量和结果记录。
+/// **2026-11-11 用户定：Word 的宏一律不保留，统一存 .docx**（`wdFormatXMLDocument`）。
+/// 原来按 `HasVBProject` 分派「有宏走 .docm 保宏」，实测行不通：老 .doc 的工程多半是空壳或被
+/// 「锁定工程」保护，Word 自己另存 .docm 也会把工程丢掉（ForceDisable / ByUI / 开了 VBOM 信任都试过），
+/// 结果是一批文件白卡在「新文件里 VBA 宏不见了」。既然搬不走、用户也不要，就直接存 .docx。
+/// `DocToDocm` 那条路还留着（`XUNITHOST_DOC_KEEP_MACRO=1` 才走），备将来真要保宏时用。
 module DocUpgrade =
 
     /// 升级走哪条路，由有没有宏唯一决定（纯规则，不碰 COM，测试可直接验）
@@ -145,12 +149,22 @@ module DocUpgrade =
 
     let route (hasMacro: bool) : Route = if hasMacro then Docm else Docx
 
+    /// 要不要按「保宏」走 .docm：默认不要（用户口径），显式设环境变量才要
+    let keepMacro () =
+        match Environment.GetEnvironmentVariable "XUNITHOST_DOC_KEEP_MACRO" with
+        | null
+        | "" -> false
+        | text -> text.Trim() = "1"
+
     /// 返回 (真正落盘的目标, 状态, 详情)
     let convert (app: Application) (source: string) : string * string * string =
-        match DocIO.detectMacro app source with
-        | Ok hasMacro ->
-            match route hasMacro with
-            | Docm -> DocToDocm.convert app source
-            | Docx -> DocToDocx.convert app source
-        | Error message ->
-            (DocToDocx.targetOf source, "失败", "判不出有没有 VBA 宏，原件保留：" + message)
+        if not (keepMacro ()) then
+            DocToDocx.convert app source
+        else
+            match DocIO.detectMacro app source with
+            | Ok hasMacro ->
+                match route hasMacro with
+                | Docm -> DocToDocm.convert app source
+                | Docx -> DocToDocx.convert app source
+            | Error message ->
+                (DocToDocx.targetOf source, "失败", "判不出有没有 VBA 宏，原件保留：" + message)

@@ -67,7 +67,7 @@ module Convert =
                       Status = "失败"
                       Detail = "起 Excel 失败：" + message })
 
-    /// 常驻 Excel（黑板挂回式）：app 是 ExcelHost.Host.GetApplication 交回的**现成实例**。
+    /// 常驻 Excel（黑板挂回式）：app 是 ExcelHost.ExcelTask.GetApplicationAsync 交回的**现成实例**（按 info.Pid 挂回）。
     /// 只逐份开/关自己那本工作簿 —— 绝不 CloseAllWorkbooksWithoutSaving、绝不 Quit、绝不新建。
     /// 调用方必须把这段活包在 OsHost.Sta.run 里（与附着同一条固定 STA 线程）。
     let booksAttached
@@ -75,6 +75,15 @@ module Convert =
         (items: Item list)
         : Outcome list =
         items |> List.map(fun i -> ExcelHost.XlsUpgrade.convert app i.Source |> toOutcome i)
+
+    /// 常驻 Word（挂回式）：app 是 WordTask.GetApplicationAsync 交回的**现成实例**。
+    /// 只逐份开/关自己那一份 —— 绝不 Quit、绝不新建、绝不关用户开着的文档。
+    /// 调用方必须把这段活包在 OsHost.Sta.run 里（与附着同一条固定 STA 线程）。
+    let docsAttached
+        (app: Microsoft.Office.Interop.Word.Application)
+        (items: Item list)
+        : Outcome list =
+        items |> List.map(fun i -> WordHost.DocUpgrade.convert app i.Source |> toOutcome i)
 
     /// 一个 PowerPoint 进程里转一批 .ppt：判宏、选路都在 PowerPointHost.PptUpgrade 里
     let shows (items: Item list) : Outcome list =

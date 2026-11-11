@@ -1,7 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Word 主机（netstandard2.0）：Host.fs 管取/建实例与收尾；末尾 DocIO.fs + DocUpgrade.fs（.doc 升级统一入口）。
+    Word 主机（netstandard2.0）：Host.fs 管取/建实例、认人、收尾与一次性命令；WordTask.fs 是成品 Task 入口；
+    末尾 DocIO.fs + DocUpgrade.fs（.doc 升级统一入口）。
     有实例取实例，没有就创建一个；不隐藏窗口、不退出，生命周期归调用方。
     互操作程序集随本库一起输出，消费方不必装 Office PIA。
   -->
@@ -18,6 +19,8 @@
 
   <ItemGroup>
     <Compile Include="Host.fs" />
+    <!-- 成品 Task 入口单独一份（照 ExcelTask.fs）：只做闸门 + 排 STA + 抛成 faulted -->
+    <Compile Include="WordTask.fs" />
     <!-- 末尾：DocToDocx / DocToDocm / DocUpgrade 三个入口合在一份文件里；DocIO 是共用 COM 细节 -->
     <Compile Include="DocIO.fs" />
     <Compile Include="DocUpgrade.fs" />
