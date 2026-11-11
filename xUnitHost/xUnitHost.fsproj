@@ -31,24 +31,56 @@
     <Compile Include="BlackboardTest.fs" />
     <!-- 另一条路：与 AppKind 解耦的通用参数表；复用 BlackboardProbe，故排在黑板之后 -->
     <Compile Include="GeneralAppInfoTest.fs" />
-    <!-- Excel 上「用 GeneralAppInfo 的 GetApplication」入口；复用 BlackboardProbe -->
-    <Compile Include="ExcelGeneralTest.fs" />
     <Compile Include="HostGreetingTest.fs" />
     <Compile Include="SecondProcessTest.fs" />
     <Compile Include="CollaborationTest.fs" />
     <Compile Include="ConvertTest.fs" />
     <!-- 常驻 Excel 挂回式通道：排在 ConvertTest.fs 之后，复用 RealFolder -->
     <Compile Include="AttachedConvertTest.fs" />
+    <!-- 烟气参数：黑板挂回现成 Excel，把「名称，单位」拆成 B/C 两列 -->
+    <Compile Include="GasParamTest.fs" />
+    <!-- 焦炉煤气：按「选设备稍有裕量」把 D 列区间定成 E 列设计值 -->
+    <Compile Include="GasDesignTest.fs" />
+    <!-- 被加热烟气成分：燃烧计量 → A13 起写组分 vol.%（焓值输入） -->
+    <Compile Include="GasFlueTest.fs" />
+    <!-- 烟气吸热量：参考「体积法scr烟气吸热」，A3 起复刻体积法计算链 -->
+    <Compile Include="GasHeatTest.fs" />
+    <!-- 公式写法对比：Range.Formula 自动补 @，Range.Formula2 原样存（临时工作簿，测完即关） -->
+    <Compile Include="ExcelFormula2Test.fs" />
+    <!-- 补热燃烧计算：参考 煤气燃烧计算.xlsx，另存 补热焦炉煤气燃烧计算书.xlsx -->
+    <Compile Include="GasCombustionTest.fs" />
+    <!-- 被加热烟气成分：由含氧量反算 α，只算成分（不写焓值与放热量） -->
+    <Compile Include="GasCompositionTest.fs" />
+    <!-- 补热燃烧去二分：放热量改回 LHV − 产物显热，删掉 T_ad 反解与 F:L 二分表（改用户真表） -->
+    <Compile Include="GasAdiabaticTrimTest.fs" />
+    <!-- 燃烧器选型：按燃料类型把不同口径的选型计算一起开进用户那只 Excel（只开不关） -->
+    <Compile Include="BurnerCatalogTest.fs" />
+    <!-- 燃烧器选型表：参照「天然气燃烧器」骨架，在补燃计算书里新建「燃烧器选型」并接到补热表 -->
+    <Compile Include="BurnerSelectTest.fs" />
     <!-- P0 安全开关：不弹修复框、不启用宏、按类型分三轮 -->
     <Compile Include="ConvertSafetyTest.fs" />
     <Compile Include="DnTest.fs" />
     <Compile Include="PriceTest.fs" />
     <Compile Include="DocSyncTest.fs" />
+    <!-- 山西太钢技术协议：挂回正开着的 Word，只读读出燃烧器的燃料量 / 助燃风量 -->
+    <Compile Include="TaigangProtocolTest.fs" />
     <Compile Include="CommandTest.fs" />
     <Compile Include="RxCommandTest.fs" />
     <Compile Include="PptUpgradeTest.fs" />
-    <!-- AutoCADHost.Application：按 PID 挂回 COM Application + 根对象 -->
-    <Compile Include="AcadApplicationTest.fs" />
+    <!-- 五角星：纯几何源文件链接进来，Fact 验的公式就是插件画图用的那一份 -->
+    <Compile Include="..\AcadMgdHost\StarGeometry.fs" Link="StarGeometry.fs" />
+    <Compile Include="AcadMgdStarTest.fs" />
+    <!-- 一对 Begin/End 事件 → 一个 Task：假事件源离线自检（排在挂回之前，两者各自独立） -->
+    <Compile Include="FakeEventPair.fs" />
+    <Compile Include="EventPairTest.fs" />
+    <!-- AutoCADHost.Task（Task.fs）：按 PID 挂回 + 命令/LISP 的 Task 入口；真机那条等 EndCommand + LISP 结果文件 -->
+    <Compile Include="AcadAttachTest.fs" />
+    <!-- ExcelHost.ExcelTask.GetApplicationAsync：按 PID 挂回 Excel（Task 版，与 AutoCAD 同口径） -->
+    <Compile Include="ExcelAttachTest.fs" />
+    <!-- OsHost.TextFile：读文本认编码 + 短名称注册的验证 -->
+    <Compile Include="TextFileTest.fs" />
+    <!-- 热风炉计算书摘要：先只读转储 Excel 计算书，再往用户开着的 Word 里落摘要 -->
+    <Compile Include="StoveSummaryTest.fs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -60,10 +92,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\OsHost\OsHost.fsproj" />
+    <ProjectReference Include="..\AutoCADHost\AutoCADHost.fsproj" />
     <ProjectReference Include="..\WordHost\WordHost.fsproj" />
     <ProjectReference Include="..\ExcelHost\ExcelHost.fsproj" />
     <ProjectReference Include="..\PowerPointHost\PowerPointHost.fsproj" />
-    <ProjectReference Include="..\AutoCADHost\AutoCADHost.fsproj" />
   </ItemGroup>
 
   <ItemGroup>
