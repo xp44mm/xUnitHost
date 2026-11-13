@@ -4,29 +4,23 @@
 
 | 项目 | 目标框架 | 职责 |
 |---|---|---|
-| `OsHost` | netstandard2.0 | 操作系统层：STA 线程、进程账本、窗口 → 进程号、时间/文件时间、COM 底层、异常归因；**通用进程地址 `Address.fs`（`ProcAddress` + `Address` 规则）与起 / 关两条通用命令 `ProcHost.fs`**（任意进程，2026-11-06 从 ExcelCli 上收）；四家 host 共用 |
+| `OsHost` | netstandard2.0 | 操作系统层：STA 线程、进程账本、窗口 → 进程号、时间/文件时间、COM 底层、异常归因、**现场快照 `Identity`（会话层地址的指纹就是从它来的）**；四家 host 共用 |
 | `WordHost` / `ExcelHost` / `AutoCADHost` | netstandard2.0 | 各管各的：取实例（只取现有 / 取或建）、认自己是谁、收尾、一次性 exec |
-| `PowerPointHost` | netstandard2.0 | 2026-11-06 18:12 用户明确要求新建的第 6 个项目。`Host.fs`：取/建实例、`CloseAllPresentations` + `QuitWithoutSaving`、`exec` / `execQuery`（方式一；**没有会话层 identity**）；`PptIO.fs`：Open / SaveAs / 幻灯片文字指纹 / 判宏 / 临时文件 / 只读读回；`PptUpgrade.fs`：`PptToPptx`(24) / `PptToPptm`(25) / `PptUpgrade.pptUpgrade`（`convert` 为对齐别名）。互操作程序集 `Interop.PowerPoint16.dll` 由本机 `MSPPT.OLB` 经 TlbImp 生成，放在 `refs/interop16/` |
-| `AcadMgdHost` | netstandard2.0 / x64 | 2026-11-06 18:48 用户明确要求新建的第 7 个项目。**给 accoreconsole.exe / Core Console 用 NETLOAD 加载的 F# 插件**，与 `AutoCADHost` 的 COM 路线完全无关。只引 `acdbmgd.dll` + `accoremgd.dll`（`Private=false`），**绝不引 `acmgd.dll` 等 UI DLL**；`Commands.fs`（`Probe` / `Entry : IExtensionApplication` / `Commands`：`XH_HELLO`、`XH_DB`）+ `AssemblyInfo.fs`（`ExtensionApplication` / `CommandClass` 程序集属性）+ `test/run.cmd`（`/i` + 绝对路径 `/s` 脚本）。详见下面「AcadMgdHost」一节 |
-| `xUnitHost` | net10.0 Exe | 测试项目，也是测试入口。**前部**公用件：`Common.fs`（报告/认人/忙重试）、`Session.fs`（会话层）、`ConvertCore.fs`（Item/Outcome/Paths）、`Convert.fs`（分派/批量/核对）、`ProcRx.fs`（Rx 版两条命令的事件流与组合编排）；四条转换住在各自 host 库末尾，两侧对称（`WordHost/DocIO.fs` + `DocUpgrade.fs` 含 DocToDocx / DocToDocm / DocUpgrade；`ExcelHost/BookIO.fs` + `XlsUpgrade.fs` 含 XlsToXlsx / XlsToXlsm / XlsUpgrade）；后面是各 Fact，包括「第二个进程」自己（`SecondProcessTest.fs`）、同步派发（`CommandTest.fs`）、Rx 派发（`RxCommandTest.fs`） |
-| `xUnitHost/CommandTest.fs` | net10.0 Exe 内的一条 Fact | 两条命令的同步派发验证（`-m "*派发*"`）：`module Dispatch` 注入 Excel 策略（COM 启动 + `UserControl=true`；ROT 认人 + 四项指纹 + Quit + 放 RCW），也被 Rx 版 Fact 复用；Fact ① 派发 `ProcHost.startWith` 起常驻 Excel 并打印 `Launched`，② 拿①的地址派发 `ProcHost.closeWith` 并打印 `Closed`，末尾 `Proc.waitGone` 复核现场 |
-| `xUnitHost/ProcRx.fs` + `RxCommandTest.fs` | 同上，`System.Reactive` 6.0.2 | Rx 版（`-m "*Rx 两条命令*"`）：`ProcessEvent`（Started / Closed / Exited / Refused）+ `ProcRx.start` / `close` / `flow`；`Observable.Create` 包同步命令，`Process.Exited` 事件流 + `Interval` 轮询 `Merge().Take(1)`，`SelectMany` + `Timer(300ms)` 把 Started 接上 close，`Timeout(30s)` 防挂死；退出检测在 close 一侧且**命令执行前**订阅，保证 `Started → Closed → Exited → OnCompleted` 顺序。旧 `CliTest.fs`（依赖已删的 `ExcelCli.exe`）已于 2026-11-06 18:07 经用户确认删除 |
+| `PowerPointHost` | netstandard2.0 | `Host.fs`：取/建实例、`CloseAllPresentations` + `QuitWithoutSaving`、`exec` / `execQuery`（方式一；**没有会话层 identity**）；`PptIO.fs`：Open / SaveAs / 幻灯片文字指纹 / 判宏 / 临时文件 / 只读读回；`PptUpgrade.fs`：`PptToPptx`(24) / `PptToPptm`(25) / `PptUpgrade.pptUpgrade`（`convert` 为对齐别名）。互操作程序集 `Interop.PowerPoint16.dll` 由本机 `MSPPT.OLB` 经 TlbImp 生成，放在 `refs/interop16/` |
+| `AcadMgdHost` | netstandard2.0 / x64 | **给 accoreconsole.exe / Core Console 用 NETLOAD 加载的 F# 插件**，与 `AutoCADHost` 的 COM 路线完全无关。只引 `acdbmgd.dll` + `accoremgd.dll`（`Private=false`），**绝不引 `acmgd.dll` 等 UI DLL**；`Probe.fs` + `Star.fs` / `StarGeometry.fs`（五角星）+ `Commands.fs`（`Entry : IExtensionApplication` / `Commands`：`XH_HELLO`、`XH_DB`、`XH_STAR`）+ `AssemblyInfo.fs`（`ExtensionApplication` / `CommandClass` 程序集属性）+ `test/run.cmd`（`/i` + 绝对路径 `/s` 脚本）。详见下面「AcadMgdHost」一节 |
+| `xUnitHost` | net10.0 Exe | 测试项目，也是测试入口。**前部**公用件：`Common.fs`（报告/认人/忙重试）、`Session.fs`（会话层）、`ConvertCore.fs`（Item/Outcome/Paths）、`Convert.fs`（分派/批量/核对）；四条转换住在各自 host 库末尾，两侧对称（`WordHost/DocIO.fs` + `DocUpgrade.fs` 含 DocToDocx / DocToDocm / DocUpgrade；`ExcelHost/BookIO.fs` + `XlsUpgrade.fs` 含 XlsToXlsx / XlsToXlsm / XlsUpgrade）；后面是各 Fact，包括「第二个进程」自己（`SecondProcessTest.fs`） |
 
-现在是**七个项目**：操作系统层 → 四家 COM host + 一家 accoreconsole 插件 → 会话层（测试项目前部）→ `xUnitHost`。
-独立命令行 `ExcelCli` 曾获批准新建，2026-11-06 16:09 用户又把它整个删掉；通用能力留在 `OsHost`。
-同日 18:12 用户明确要求新建 `PowerPointHost`；18:48 又要求新建 `AcadMgdHost`，
-`xUnitHost.slnx` 现为七个项目。
+现在是**七个项目**（`xUnitHost.slnx` 就是这七行）：操作系统层 → 四家 COM host + 一家 accoreconsole 插件 → 会话层（测试项目前部）→ `xUnitHost`。
 `PowerPointHost` 只挂在 `xUnitHost`（测试项目引它 + `Interop.PowerPoint16.dll`），不参与 `Convert.all`
 批量分派：`.ppt` 走 `Host.execQuery` 里直接调 `pptUpgrade`。
 往现有项目**加文件随时可以**（新 Fact、新公用模块），但**不许私自新建项目**：要开新的先问用户。
-公用的一律往上收（`OsHost` 或 `xUnitHost/Common.fs`）—— `HostSession`、`DocConvert`、`CrossProcessWorker` 这三个小项目都是这么并掉的。
+公用的一律往上收（`OsHost` 或 `xUnitHost/Common.fs`），别再另开小项目。
 
 「另一个进程」不另编程序：跨进程那条 Fact 用 `Report.selfExe()` 把自己再起一份、
 `-method "*第二个进程*"` 只跑那一条，地址和话走环境变量，回话写文件。
 
 x64 平台（AutoCAD 互操作只有 64 位）。互操作程序集在 `refs/interop16/` 和
 `C:\Program Files\Autodesk\AutoCAD 2020\`，各项目用 `Reference + HintPath` 直接引，不走 NuGet。
-`System.Reactive` 6.0.2 **只加在 `xUnitHost`**（Rx 版两条命令用）；`OsHost` 与三家 host 库保持零新依赖。
 
 ## AcadMgdHost（accoreconsole 插件）
 
@@ -36,9 +30,10 @@ x64 平台（AutoCAD 互操作只有 64 位）。互操作程序集在 `refs/int
 | 东西 | 位置 / 用法 |
 |---|---|
 | 引用 | `C:\Program Files\Autodesk\AutoCAD 2020\acdbmgd.dll` + `accoremgd.dll`，`Private=false`（Copy Local = False，AutoCAD 自带，复制会出现两份）；**绝不引 `acmgd.dll` / `AcCui` / `AdUIMgd` 等 UI DLL**。不引 `OsHost`，不带 COM 依赖 |
-| `module internal Probe` | `Commands.fs`：`line` / `banner`（程序集、TFM、宿主进程、CLR）/ `database`（`HostApplicationServices.WorkingDatabase` + Transaction 读模型空间实体数）。`line` 同时 `Console.WriteLine` 并按 `ACADMGDHOST_LOG` 追加日志文件 |
+| `module internal Probe` | `Probe.fs`：`line` / `banner`（程序集、TFM、宿主进程、CLR）/ `database`（`HostApplicationServices.WorkingDatabase` + Transaction 读模型空间实体数）。`line` 同时 `Console.WriteLine` 并按 `ACADMGDHOST_LOG` 追加日志文件 |
+| `module internal Star` + `StarGeometry` | `Star.fs`：在 `WorkingDatabase` 里画五角星 → `SaveAs` 到桌面（`ACADMGDHOST_STAR_OUT` 可覆盖）→ 从磁盘重开逐点读回核对；`StarGeometry.fs` 只有纯几何 `vertices` / `innerRatio`（sin18°/sin54°≈0.381966），**同一份源文件链接进 `xUnitHost` 的 Fact**，画的和断言的是同一个公式 |
 | `Entry : IExtensionApplication` | NETLOAD 即调 `Initialize`（无条件报一行 `loaded`）；`ACADMGDHOST_AUTORUN=1` 时直接跑 banner + database，不依赖命令注册 |
-| `Commands` | `[<CommandMethod("XH_HELLO")>]` / `[<CommandMethod("XH_DB")>]` 两个自定义命令 |
+| `Commands` | `[<CommandMethod("XH_HELLO")>]` / `XH_DB` / `XH_STAR` 三个自定义命令 |
 | `AssemblyInfo.fs` | 编译顺序最后：`[<assembly: ExtensionApplication(typeof<Entry>)>]` + `[<assembly: CommandClass(typeof<Commands>)>]` |
 | `test/run.cmd` | 可重跑记录：种子 DWG 复制到 `%TEMP%`（避安装目录只读警告）→ 生成绝对路径 .scr → `/i` + `/s` 调 accoreconsole → 末尾 `type` 插件日志 |
 
@@ -65,7 +60,8 @@ val openSession : Kind -> Session
 val exec         : Session -> (App -> 'T) -> Result<'T * Session, string>
 val execWord     : Session -> (Word.Application -> 'T) -> Result<'T * Session, string>
 val execExcel    : Session -> (Excel.Application -> 'T) -> Result<'T * Session, string>
-val execAcad     : Session -> (AcadApplication -> 'T) -> Result<'T * Session, string>
+// 没有 execAcad：acad 不进会话层（Kind 只有 Word | Excel）。
+// acad 按 PID 挂回 + 发命令一律走 AutoCADHost.AutoCADTask，见下面「AutoCADHost.AutoCADTask」一节。
 
 // 凭地址回来（跨进程也行），再执行一步
 val execByAddress: string -> (App -> 'T) -> Result<'T * Session, string>
@@ -90,8 +86,8 @@ val execOnceQuery : Kind -> (App -> 'T) -> Result<'T, string>
 ## 类型
 
 ```fsharp
-type Kind = Word | Excel | AutoCAD
-type App  = WordApp of Word.Application | ExcelApp of Excel.Application | AcadApp of AcadApplication
+type Kind = Word | Excel          // acad 不在会话层：没有 Kind.AutoCAD
+type App  = WordApp of Word.Application | ExcelApp of Excel.Application
 
 type Session =
     { Address: string        // 地址（下一步凭它回来）
@@ -156,71 +152,44 @@ OsHost.Paths.savedMs   : string option -> int64       // 磁盘上的 LastWriteT
 
 OsHost.Com.running : string list -> obj option        // ROT 里取现成实例，绝不新建
 OsHost.Com.create  : string list -> obj               // CoCreateInstance 起一个
+OsHost.Com.runningEntries : unit -> (string * obj) list   // 枚举 ROT（必须自己核 pid）
+
+// ROT 名的通用切 / 拼（OsHost/Rot.fs）：只认「<前缀><pid>」这个形状，纯字符串、不碰 COM
+// 前缀是各家插件定的，固化在各自项目（WordHost.Rot / PowerPointHost.Rot），通用层不认识任何前缀
+OsHost.Rot.parse : string -> (string * int) option    // !WordVSTO.Instance.27232 → Some("!WordVSTO.Instance.", 27232)
+OsHost.Rot.build : string -> int -> string option     // "!WordVSTO.Instance." 27232 → Some "!WordVSTO.Instance.27232"
 
 OsHost.Errors.explain : exn -> string                 // 剥到最内层的真实原因
 ```
 
-### 通用进程地址 + 起 / 关两条命令（`OsHost/Address.fs`、`OsHost/ProcHost.fs`）
+### 读文本文件（`OsHost/TextFile.fs`）—— 编码和行末都替你想好了
 
 ```fsharp
-// 地址格式的强类型：六段，与 Session.fs 的 word:/excel:/cad: 地址同形，任意进程通用
-type OsHost.ProcAddress =
-    { Kind: string          // 进程种类：excel / word / cad / 任意进程名
-      Pid: int
-      StartedMs: int64
-      SavedMs: int64        // 普通进程 = 0
-      PathHash: string      // 普通进程 = "-"
-      Owned: bool }         // w = 本工具起的（close 可关）；u = 用户原来开着的
-
-OsHost.Address.pathHash   : string option -> string        // 绝对路径小写 → SHA256 前 4 字节 → 8 位 hex
-OsHost.Address.format     : ProcAddress -> string          // <种类>:<pid>:<启动ms>:<保存ms>:<指纹>:<w|u>
-OsHost.Address.ofIdentity : string -> bool -> Identity -> ProcAddress
-OsHost.Address.parse      : string -> Result<ProcAddress, string>    // 只认六段；种类不限
-OsHost.Address.verify     : ProcAddress -> Identity -> string list   // 空 = 严丝合缝
-
-type OsHost.Launched = { Address: ProcAddress; Pid: int; StartedMs: int64; Others: Set<int> }
-type OsHost.Closed   = { Address: string; Pid: int; StartedMs: int64; RecognizedPid: int
-                         Quit: bool; Gone: bool; Forced: bool }
-
-OsHost.ProcHost.identityOf : int -> Identity               // 普通进程的现场：SavedMs=0 / DocPath=None
-OsHost.ProcHost.start      : string -> string -> (unit -> unit) -> Result<Launched,string>
-OsHost.ProcHost.startWith  : string -> string -> (unit -> unit) -> (int -> Identity) -> Result<Launched,string>
-                                                    // 自定义现场（Excel 用 ExcelHost.Host.identity）
-OsHost.ProcHost.close      : string -> Result<Closed,string>                  // 普通进程：闸门核完按 pid 结束
-OsHost.ProcHost.closeWith  : string -> (ProcAddress -> Result<bool * int, string>) -> Result<Closed,string>
-                                                    // graceful = 认人 + 优雅退出，Ok(quitOk, 认到的 pid)
+OsHost.TextFile.decodeAllLinesAsync : string -> Task<string * string[]>   // 编码名 * 行数组：对外唯一入口
+OsHost.TextFile.decodeAllTextAsync  : string -> Task<string * string>     // 编码名 * 全文
+OsHost.TextFile.decodeAllLines      : byte[] -> string * string[]         // 同步底座（已经是字节时用）
+OsHost.lines / OsHost.dec           : string -> Task<string * string[]>   // [<AutoOpen>] 短名，open OsHost 直接用
+OsHost.TextFile.registerTextShort / tryTextShort / textShortNames          // 短名表（默认已登记 lines / dec）
 ```
 
-`startWith` 用「起前起后扫差集」只认这次新起的进程；`closeWith` 的闸门依次是：
-六段地址 → 归属必须 `w` → pid > 0 → 进程还在 → 启动时间对得上（防 pid 复用）→ 调用方 graceful
-→ 等 5 秒 → 赖着才按地址里的 pid `Proc.kill`。Excel 的 ROT 认人 / 四项指纹 / Quit / 放 RCW
-都在 `xUnitHost/CommandTest.fs` 的 `Dispatch.close` graceful 里，OsHost 不认任何 Office 类型。
+**读任何来路不明的文本一律用它**，别写 `File.ReadAllLines`、别自己 `Encoding.GetEncoding` 试、别手切 `\r\n`：
 
-## Rx 版两条命令（源文件 `xUnitHost/ProcRx.fs`，只加在测试项目）
+- 判定顺序：① BOM（UTF-8 / UTF-16LE|BE / UTF-32LE|BE，编码名带 `-bom`，BOM 字节会剥掉，不会粘在第一行行首）→
+  ② 全字节 < 0x80 → `ascii` → ③ 无 BOM 时 **UTF-8 与 GBK(936) 各自严格试解码**：
+  只有一个过就报那个；都过且文本不同 → `utf-8|gbk`（**标明歧义，不默默选边**，正文按 UTF-8 给）；
+  都不过 → 取替换字符少的那个，编码名带 `?` 表示存疑。
+- 行：按 `\r\n` / `\n` / `\r` 切（裸 `\r` 也认），**末尾换行不多带一个空行**。
+- 与项目约定对得上：写文件是 UTF-8 + BOM + CRLF，读回来第一行不带 BOM 残留、最后不多一个 `""`。
 
 ```fsharp
-type ProcessEvent =
-    | Started of OsHost.Launched
-    | Closed  of OsHost.Closed
-    | Exited  of pid:int * exitCode:int option * via:string   // via = "Process.Exited" / "轮询兜底"
-    | Refused of reason:string
-
-ProcRx.start : (unit -> Result<Launched,string>) -> IObservable<ProcessEvent>
-ProcRx.close : ProcAddress -> (string -> Result<Closed,string>) -> int -> IObservable<ProcessEvent>
-ProcRx.flow  : TimeSpan -> TimeSpan -> IObservable<ProcessEvent>
-               -> (ProcAddress -> IObservable<ProcessEvent>) -> IObservable<ProcessEvent>
+// FSI / 脚本最省事的写法：直接引编译产物，别抄源码
+#r @"C:\Application Data\GitHub\xp44mm\xUnitHost\OsHost\bin\Debug\net10.0\OsHost.dll"
+open OsHost
+let enc, rows = lines @"C:\某个\未知编码.txt" |> Async.AwaitTask |> Async.RunSynchronously
+printfn "%s / %d 行 / 首行 %s" enc rows.Length rows.[0]
 ```
 
-- `start` 送完 `Started` 就 Complete；`close` **在派发命令前**订阅退出检测
-  （`Process.Exited` 事件 `Observable.Create` + `Interval` 轮询 `Merge().Take(1)`），
-  `Closed` 先发、退出事件后补；`flow` 用 `SelectMany` + `Timer(settle)` 把 Started 接上 close，
-  外层 `Timeout(30s)` 是「两个事件之间的最长间隔」，卡住就 OnError。
-- 给事件留优先窗口靠 poll 间隔（Fact 里 1000ms）：200ms 时轮询会抢先，报告 `via` 如实显示来源。
-  退出检测放 start 一侧是错的 —— 那样 Exited 会抢在 Closed 前面到。
-- `Disposable.Create` 退订时只摘 handler + `Process.Dispose()`，**绝不 kill 进程**；
-  真正结束进程只由 `ProcHost.closeWith` 按地址里的 pid 做。
-- 示范代码里的 `Process.Start "excel.exe" /e`（会复用用户实例）和 `CloseMainWindow()` 遍历
-  所有 excel 进程（会关掉用户手上的表）在本项目都不采用。
+自检：`-method "*文本读取*"`（`xUnitHost/TextFileTest.fs`，离线，不碰任何 Office 进程）。
 
 ## 转换（六条实现在 host 库；批量入口在 `xUnitHost/Convert.fs`）
 
@@ -244,12 +213,12 @@ WordHost.DocIO.readText        : Application -> string -> string
 WordHost.DocIO.detectMacro     : Application -> string -> Result<bool, string>  // 读不出 VBA 信息就 Error，原件保留
 
 // WordHost/DocUpgrade.fs（末尾：三个入口合在一份文件）
-WordHost.DocToDocx.format / targetOf / convert            // 12，无宏；带宏拒单
-WordHost.DocToDocm.format / targetOf / convert            // 13，正文 + 复核 VBA 宏还在
+WordHost.DocToDocx.format / targetOf / convert            // 12，→ .docx（宏不保留，2026-11-11 用户定）
+WordHost.DocToDocm.format / targetOf / convert            // 13，→ .docm；只在 XUNITHOST_DOC_KEEP_MACRO=1 时走
 WordHost.DocUpgrade.Route  = Docx | Docm                  // 纯规则，测试可直接验
-WordHost.DocUpgrade.route   : bool -> Route               // 有宏 → Docm，没宏 → Docx
+WordHost.DocUpgrade.route   : bool -> Route               // 纯规则：有宏 → Docm，没宏 → Docx
 WordHost.DocUpgrade.convert : Application -> string -> string * string * string
-                                                        // 统一入口：判宏 → 选路 → 转；判不出就失败、原件保留
+                                                        // 统一入口：**默认一律 .docx**；KEEP_MACRO=1 才按 route 走 Docm
 
 // ExcelHost/BookIO.fs（ExcelHost 内，两条转换共用）
 ExcelHost.BookIO.openBook / closeBook / bookPrint / hasVba / stageFor / cleanupStage
@@ -293,40 +262,126 @@ XUNITHOST_CONVERT_DIR=<目录> [XUNITHOST_CONVERT_BATCH=10]   xUnitHost.exe -sho
   xUnitHost.exe -showLiveOutput -method "*真目录*转*"     # 转 + 核对 + 删通过的原件
 ```
 
-## 三个 host 库
+## 三家 host 库（Word / Excel / PowerPoint）
+
+> **`AutoCADHost` 没有 `Host.fs`** —— 它只有 `EventPair.fs` / `AcadBeginEnd.fs` / `Application.fs` /
+> `AutoCADTask.fs`，驱动入口全在 `module AutoCADHost.AutoCADTask`（见下一节）。下面这段 `Host.*` 只管 Office 三家。
 
 ```fsharp
-// 对外签约：有就复用，没有就新建（Excel 会补空白工作簿，AutoCAD 会起分钟级的进程）
-WordHost.Host.GetOrCreateApplication   : unit -> Application
-ExcelHost.Host.GetOrCreateApplication  : unit -> Application
-AutoCADHost.Host.GetOrCreateApplication: unit -> AcadApplication
+// 对外签约：有就复用，没有就新建（Excel 会补空白工作簿）
+WordHost.Host.GetOrCreateApplication        : unit -> Application
+ExcelHost.ExcelTask.getOrCreateOnSta        : unit -> Application   // 必须在固定 STA 线程上（Sta.run 里）
 
 // 同事打招呼：只接 ROT 里现成的，没有就是 None，绝不新建
 WordHost.Host.TryGetRunningApplication   : unit -> Application option
 ExcelHost.Host.TryGetRunningApplication  : unit -> Application option
-AutoCADHost.Host.TryGetRunningApplication: unit -> AcadApplication option
 
 // 认自己是谁：进程号 + 锚定文档 + 最后保存 + 有无未保存改动（地址指纹的来源）
 WordHost.Host.identity     : Application -> OsHost.Identity
 ExcelHost.Host.identity    : Application -> OsHost.Identity
-AutoCADHost.Host.identity  : AcadApplication -> OsHost.Identity
 WordHost.Host.pidOf        : Application -> int option          // 从文档窗口往上找 OpusApp
 ExcelHost.Host.pidOf       : Application -> int option          // app.Hwnd
-AutoCADHost.Host.pidOf     : AcadApplication -> int option      // app.HWND
+
+// ROT 注册名（前缀固化在各家）：!WordVSTO.Instance.<pid> / !PowerPointVSTO.Instance.<pid>
+WordHost.Rot.Prefix        : string                       // "!WordVSTO.Instance."
+WordHost.Rot.pidOf         : string -> int option         // 前缀不对就 None（别人的登记项不认）
+WordHost.Rot.nameOf        : int -> string option         // pid → "!WordVSTO.Instance.<pid>"
+PowerPointHost.Rot.Prefix / pidOf / nameOf                // 同形，"!PowerPointVSTO.Instance."
 
 // 收尾：丢改动 + Quit，不弹保存框
 WordHost.Host.QuitWithoutSaving     : Application -> unit
 ExcelHost.Host.QuitWithoutSaving    : Application -> unit
 ExcelHost.Host.CloseAllWorkbooksWithoutSaving : Application -> int
-AutoCADHost.Host.QuitWithoutSaving  : AcadApplication -> unit
-AutoCADHost.Host.CloseActiveDocumentWithoutSaving : AcadApplication -> bool
-AutoCADHost.Host.CloseAllDocumentsWithoutSaving   : AcadApplication -> int
 
-// 方式一：起一个 → 干活 → 关掉（AutoCAD 要求本机没有实例在跑）
+// 方式一：起一个 → 干活 → 关掉
 WordHost.Host.exec      : (Application -> unit) -> Result<unit, string>
 WordHost.Host.execQuery : (Application -> 'T) -> Result<'T, string>
-// Excel / AutoCAD 同名
+// Excel 同名
 ```
+
+## 成品 Task 入口（`ExcelTask.fs` / `WordTask.fs`）
+
+访问代码优先用这一层：`*Async` 名字、返回 `Task<_>`，`let!` 直接串。三家的形状一致：
+**前置闸门同步判**（不合格立刻交回已完成且 faulted 的 `Task`，连 STA 队列都不排）→ 合格才排进
+`OsHost.Sta.runAsync` 那条固定 STA 线程 → `Result` 的 `Error` 由 `unwrap` 抛异常置成 faulted，
+await 时抛 `InvalidOperationException`，文案与同步版一致。
+
+```fsharp
+// 挂回现成的那一只（按 PID 硬核对；绝不新建、绝不 Quit）
+ExcelHost.ExcelTask.GetApplicationAsync      : int -> Task<Application>
+AutoCADHost.AutoCADTask.GetApplicationAsync  : int -> Task<IAcadApplication>
+WordHost.WordTask.GetApplicationAsync        : int -> Task<Application>
+PowerPointHost.Host.GetApplication           : int -> Result<Application, string>   // 同步
+
+// 起或取（对外签约：真会起进程；Excel 会补一张空白工作簿，XLL 一起加载）
+ExcelHost.ExcelTask.getOrCreateOnSta            : unit -> Application        // 已经在 STA 上时用这条（同步）
+ExcelHost.ExcelTask.GetOrCreateApplicationAsync : unit -> Task<Application>  // 不在 STA 时用这条
+```
+
+RCW 仍只在固定 STA 线程上用：`await` 之后每一步包 `Sta.run` / `Sta.runAsync`。
+验证：`-m "*Excel 挂回*"`（离线三条 PID 闸门 + 真机）、`-m "*不合格*"`（Word / PPT 闸门）。
+
+## AutoCADHost.AutoCADTask（acad 的 COM 驱动入口）
+
+源文件 `AutoCADHost/AutoCADTask.fs`（`module AutoCADHost.AutoCADTask`，编译顺序排在 `Application.fs` 之后）。
+**做 acad 的活就用这里的函数**，别自己拼 `SendCommand`、别自己 `add_BeginCommand`。
+所有输入类型都是接口：`IAcadApplication` / `IAcadDocument`（不是 coclass `AcadApplication`）。
+
+```fsharp
+// 挂回：按 PID 取活着的那只。PID ≤ 0 / 不是 acad → 已完成且 faulted 的 Task，绝不新建
+val GetApplicationAsync : int -> Task<IAcadApplication>
+
+// 命令：BeginCommand → EndCommand。结果 = 命令名。commandAsync 用于「启动动作不是发命令行」
+val sendCommandAsync : EventPair.Options -> IAcadDocument -> string -> Task<string>
+val commandAsync     : EventPair.Options -> IAcadApplication -> (unit -> unit) -> Task<string>
+
+// 打开图纸：BeginOpen → EndOpen，结果 = 图纸全名
+val openDrawingAsync : EventPair.Options -> IAcadApplication -> (unit -> unit) -> Task<string>
+
+// 模态对话框：BeginModal → EndModal（对话框关掉 AutoCAD 才真的空下来）
+val modalAsync : EventPair.Options -> IAcadApplication -> Task<unit>
+
+// LISP：BeginLisp → EndLisp（Esc 走 LispCancelled）
+type LispOutcome = Completed | Cancelled
+val runLispAsync          : IAcadDocument -> string -> Task<LispOutcome>                      // 默认策略
+val sendLispAndWaitAsync  : EventPair.Options -> IAcadDocument -> string -> Task<LispOutcome>
+val runLispFileAsync      : IAcadDocument -> string -> Task<LispOutcome>                      // (load "...")，等
+
+// LISP：只交出去，不等（fire-and-forget）
+val sendLispAsync : IAcadDocument -> string -> Task<unit>
+val loadLispAsync : IAcadDocument -> string -> Task<unit>
+
+// 事件策略（EventPair.fs）
+type EventPair.Options =
+    { RequireBegin: bool           // 必须先见 Begin 才认 End，防串台
+      Timeout: TimeSpan option     // None = 不设时限（可能永久挂住，不推荐）
+      Cancellation: CancellationToken
+      Unsubscribe: IDisposable -> unit }   // 退订必须在挂 RCW 的那条 STA 上
+val EventPair.defaults : Options   // RequireBegin=true / 30 s / 不取消 / 就地 Dispose
+```
+
+判据（选错函数就会 30 秒超时或提前返回）：
+
+| 送进去的东西 | 用它 | 等的钩子 |
+|---|---|---|
+| 内置命令 `_.LINE` / `_.CIRCLE` / `_.ZOOM` | `sendCommandAsync` | EndCommand（`SendCommand` 返回不算完） |
+| 一整段 LISP `(progn …)` / `(setq …)` / `(load "…")` | `runLispAsync` / `runLispFileAsync` | EndLisp（内部 `(command …)` 的 EndCommand 先到，别误判） |
+| LISP 但后面没有串行动作 | `sendLispAsync` / `loadLispAsync` | 不等，返回只代表「已交出去」 |
+| 打开一张图 | `openDrawingAsync` | EndOpen（比撞忙重试可靠） |
+| 有模态框挡着 | `modalAsync` | EndModal |
+
+线程与公寓：这些入口都必须在挂着 RCW 的那条 STA 线程上调用（`start` 也在调用线程同步跑）。
+写法固定是 `Sta.runAsync(fun () -> AutoCADTask.xxx …).Unwrap()`；`GetApplicationAsync` 取回的 RCW
+后续也要在 `Sta.run` 里用。`AutoCADHost.AutoCADTask` 与 `System.Threading.Tasks.Task` 同名，
+测试文件里起别名 `module AcadTaskCheck = AutoCADHost.AutoCADTask`。
+
+两个已知坑（真机 R23.1 验过）：`(getvar "PID")` 不存在（返回 nil），要证明「跑在哪只 acad 里」
+用 `(getvar "DWGNAME")` / `(getvar "ACADVER")`；写文件用 `(vl-princ-to-string …)`，
+`itoa` 碰到 nil / 实数直接报错，只留一个 0 字节还被锁住的文件。`EndLisp` 只代表**求值结束**、
+不代表成功 —— 要数据就让 LISP 自己写结果文件，F# 侧等「能独占打开且内容非空」。
+
+验证：`-method "*EndLisp*"`、`-method "*发一行 LISP*"`、`-method "*挂回 PID*"`、
+`-method "*acad 发内置命令*"`；真机全部要 `XUNITHOST_ACAD_PID=<pid>`，没设就 Skip。
 
 ## 取文档对象的常用写法
 
@@ -361,67 +416,37 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -noColor -showLiveOutput
 `-list tests` 看所有 Fact；`-id <id>` 按 ID 跑单个用例；`-class "XUnitHost.CollaborationTest"` 按类跑
 （Fact 改成成员方法后，`-method` 要带类名匹配）。
 
-## 黑板模式：四家 GetApplication(info)（2026-11-07）
+## 黑板模式：按信息挂回现成实例
 
-场景：WordVSTO / ExcelVSTO 插件把当前实例抄到黑板上（`[…] 采集时间 …` / PID / ROT / HWND / EXE / 文档 / 路径），
-消费方只按 info 精确挂回那一只实例读写；**黑板的创建与销毁不归它管**，不并行，交接时数据要完整、不过时、没被别的任务改过。
+场景：WordVSTO / ExcelVSTO / CuislCad 插件把当前实例抄到黑板上（`[…] 采集时间 …` / KIND / PID / ROT / HWND / EXE / 文档 / 路径），
+消费方只按信息精确挂回那一只实例读写；**黑板的创建与销毁不归它管**，不并行，交接时数据要完整、不过时、没被别的任务改过。
 
-- `OsHost/GeneralAppInfo.fs`（**现在只此一条路**）：`GeneralIdentity` 三个**参数**占位
-  `Image`（进程名）/ `Name`（显示名）/ `Tag`（调用方自己的种类标记），`GeneralIdentity.create (image, name, tag)`；
-  `GeneralAppInfo` 是调用方要填的结构化参数表
-  `Identity/Pid/Rot/Hwnd/ExePath/CapturedMs/DocName/DocPath`，
-  `GeneralAppInfo.create (identity, pid, rot, hwnd, exePath, capturedMs)` 起最小必填集再 `with` 补文档字段，
-  `info.describe()` 一行摘要。库只比字符串、不解释 Tag，第五家不用改库。
-  采集时间由填报方给 Unix 毫秒，库不替你猜；**库不解析文本**（展示文本解析从不进 `OsHost`）。
-  `module GeneralAppInfo`：`verify`（核「进程还在 / 启动时间不晚于采集 / HWND 仍属该 pid / EXE 一致 /
-  ROT 名后缀 pid 一致」，另多一条「Image 为空」）、`ensureTag`（比 Tag）、
-  `defaultAcquire`（ROT 名优先，空则按 ProgID 列表）、
-  **`attachWith info tag acquire work`**（`acquire` / `work` 两个获取函数占位）/
-  `attach`（套默认 `defaultAcquire` 的便捷版）。
-  `attach` = 标记 → 现场校验 → 按名取对象 → 交 `work`；全程 `Sta.run` 固定 STA 线程。
-  **文档级交接检查推迟**（2026-11-07 13:51 用户定）：`DocName` / `DocPath` 只收数据、不参与判断，
-  旧 `checkDoc` 可从 git 历史（`6be1725` 及之前）找回。
-- `OsHost.Com`：`runningAt : string -> obj option`（`CreateItemMoniker("!", 名)` + `IRunningObjectTable.GetObject`，
-  **不枚举 ROT、不退回 GetActiveObject、绝不新建**）、`register` / `revoke`（自测登记本地对象用）、
-  `OsHost.Proc.exePath : int -> string option`。
-- 四家入口形状对称：`WordHost.Host.GetApplication` / `ExcelHost.Host.GetApplication` /
-  `PowerPointHost.Host.GetApplication` : `GeneralAppInfo -> Result<Application,string>`，
-  `AutoCADHost.Host.GetApplication : GeneralAppInfo -> Result<AcadApplication,string>`。
-  内部都是 `GeneralAppInfo.attach info SelfIdentity.Tag progIds work`，
-  `work` 做 `raw :?> 自家 Application` + `pidOf` 核对 + `Errors.explain`。
-  Tag 不符 / 信息过时 / ROT 里没这个名字 / pid 对不上，一律 `Error`；pid 对上就直接交回 Application
-  （13:51 起不再核当前文档，见上面的推迟说明）。
-  绝不新建、绝不 Quit、不改 `DisplayAlerts`。`PowerPointHost.Host.pidOf` 用 `app.HWND`。
-- **身份常量在专用 Host**（14:11 从删掉的 `AppKind.image()` / `kindName()` 四个分支搬过来）：
-  `WordHost.Host.SelfIdentity = ("WINWORD", "Word", "word")`、
-  `ExcelHost.Host.SelfIdentity = ("EXCEL", "Excel", "excel")`、
-  `PowerPointHost.Host.SelfIdentity = ("POWERPNT", "PowerPoint", "ppt")`、
-  `AutoCADHost.Host.SelfIdentity = ("acad", "AutoCAD", "acad")`。
-  调用方填 `GeneralIdentity` 直接取用，库里没有封闭种类枚举。
-- **公寓**：`attach` 走 `Sta.run` 固定长活 STA 线程；后续对 Application 的读写也包 `Sta.run`。
-  一步做完可直接 `GeneralAppInfo.attach info tag progIds work`，别让 RCW 跑出临时 STA 线程。
+**四家入口同形，参数只有一个进程号**：
+
+```fsharp
+ExcelHost.ExcelTask.GetApplicationAsync      : int -> Task<Application>
+AutoCADHost.AutoCADTask.GetApplicationAsync  : int -> Task<IAcadApplication>
+WordHost.WordTask.GetApplicationAsync        : int -> Task<Application>
+PowerPointHost.Host.GetApplication           : int -> Result<Application, string>   // 同步
+```
+
+同一个语义：前置闸门**同步**判（PID > 0 且确实是对应进程；不合格立刻交回已完成且 faulted 的 Task / `Error`，
+不排 STA 队列）→ 合格才排进 `OsHost.Sta.runAsync` 那条固定 STA 线程 → 从 ROT 取现成那只并核 pid：
+Excel / AutoCAD / PowerPoint 用 `Hwnd → PID`；Word 用 `ActiveWindow` 上溯 `OpusApp`，零文档时退到 ROT 名后缀。
+`unwrap` 抛的异常置成 faulted，await 时抛 `InvalidOperationException`，文案与同步版的 `Error` 一致。
+
+- **`GeneralAppInfo` 已于 2026-11-13 删除**（连同 `verify` / `attachWith` / `defaultAcquire`、`GeneralDocInfo`、
+  `GeneralAppInfoTest.fs`）：能唯一确定一只实例的只有 `Pid`；进程名可重算（各库 `SelfImage`），
+  `Rot` / `ExePath` 只作佐证，而 `Rot` 在真实调用里一直是空串。
+- `OsHost.Com`：`running`（ROT 里取现成实例）、`runningEntries`（枚举，**必须自己核 pid**）、
+  `runningAt`（按 moniker 名精确取，**不枚举、不退回 GetActiveObject、绝不新建**）、`register` / `revoke`（自测登记用）。
+- **映像名常量**：`WordHost.Host.SelfImage = "WINWORD"`、`ExcelHost.Host.SelfImage = "EXCEL"`、
+  `PowerPointHost.Host.SelfImage = "POWERPNT"`；acad 的 `"acad"` 在 `AutoCADHost/Application.fs` 里是**私有**常量
+  （`checkPid` 用它核实「确实是这个进程」）。
 - **参考解析（不是库 API）**：`xUnitHost/BlackboardText.fs`，`module internal BlackboardText`：
-  `caption` / `ofText : string -> Result<GeneralAppInfo,string>`；认出哪家就从那家 Host 取 `SelfIdentity`。
-  格式强耦合的代码只留在这份里；用不上文本源的程序直接按字段填 `GeneralAppInfo`。
-- 验证：`-method "*黑板*"` 四条（`xUnitHost/BlackboardTest.fs`）、
-  `-method "*通用参数表*"` 五条（`GeneralAppInfoTest.fs` 三条 + `ExcelGeneralTest.fs` 两条）、
-  只跑 Excel 入口 `-method "*Excel 通用参数表*"`。黑板第一条验
-  「手工填报的参数表 == 参考解析出来的那条」；真机那条设
-  `XUNITHOST_BLACKBOARD_FILE=<剪贴板文本存的文件>`，不设就 Skip。
-
-### 14:11 收束记录（旧路已删）
-
-用户把 `AppKind` / `AppInfo` 标成 `[<Obsolete>]` 后决定整份删除，范围选了
-「原来的 GetApplication 被 GeneralAppInfo 参数的替代」：
-
-- `OsHost/AppInfo.fs` 删除（`AppKind` + `AppInfo` + `verify` / `ensureKind` / `attach` 全由 `GeneralAppInfo` 覆盖），
-  `OsHost.fsproj` 去掉 Compile 行。Obsolete 标注的快照在 `19d7d0c`，旧实现可从更早的 git 历史找回。
-- `kind` 里有用的 `image()` / `kindName()` 四个分支搬进四家专用 Host 的 `SelfIdentity`（见上）。
-- 四家 `Host.GetApplication` 统一改收 `GeneralAppInfo`；14:05 为并存而加的 `ExcelHost.Host.General` 子模块撤掉，
-  函数升到 `Host` 层，成为唯一入口。
-- 测试项目：`BlackboardText.ofText` 改产出 `GeneralAppInfo`；四条黑板 Fact 与 `ExcelGeneralTest.fs` 改调新入口；
-  `GeneralBridge`（旧表 → 新表桥接）删除，`GeneralAppInfoTest.fs` 第三条重写成「四家 SelfIdentity + 入口拒接」。
-- 现场校验口径、STA 公寓要求、13:51 的文档级检查推迟决定都不变；旧路 Fact 的等价验证都保留。
-  `GeneralAppInfoTest.fs` 的「获取函数占位」那条仍用 `Com.register` 登记 `BlackboardProbe`，
-  `register / acquire / revoke` 排在**同一条** `Sta.run` 线程上，正向挂回 `Ok "XUnitHost.BlackboardProbe"`。
-  本机没有运行中的 VSTO 实例，四家真机正向 `Ok app` 仍未实跑。
+  `caption` / `ofText : string -> Result<BoardApp,string>` / `docOfText : string -> BoardDoc`。
+  `BoardApp = { Image; Pid; Rot }`、`BoardDoc = { Name; Path }` 都定义在同一份文件里（`namespace XUnitHost`），
+  只服务测试项目；格式强耦合的代码只留在这份里。
+- **公寓**：挂回走固定 STA；后续对 Application 的读写也包 `Sta.run`。
+- 验证：`-method "*黑板*"`（ROT 探针）、`-method "*不合格*"`（`AttachGateTest`：Word / PPT 闸门就地拒接）、
+  `-method "*Excel 挂回*"` 四条（含过时黑板信息按 PID 拒接）。

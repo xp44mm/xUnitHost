@@ -65,7 +65,7 @@ module internal Say =
     /// 返回（身份，读回来的文字，那张图）。
     /// 取实例用传进来的 getApp —— 连接真断了要重新取一个新的（旧的 RCW 已经跟着进程没了）。
     let acad
-        (getApp: unit -> Autodesk.AutoCAD.Interop.AcadApplication)
+        (getApp: unit -> Autodesk.AutoCAD.Interop.IAcadApplication)
         (heard: string)
         (greeting: string)
         : Doc.Identity * string * obj =
@@ -181,9 +181,9 @@ type HostGreetingTest(output: ITestOutputHelper) =
 
         Report.title output "Word → Excel：一句话传过去，Excel 接着回一句（只开这两家）"
 
-        Sta.here (fun () ->
+        STA.here (fun () ->
             let word = WordHost.Host.GetOrCreateApplication ()
-            let excel = ExcelHost.Host.GetOrCreateApplication ()
+            let excel = ExcelHost.ExcelTask.getOrCreateOnSta ()
 
             // 别弹任何确认框，否则测试会卡在模态框上；记下原值，走的时候还原（万一碰到的是别人的实例）
             let excelAlerts =
@@ -238,7 +238,7 @@ type HostGreetingTest(output: ITestOutputHelper) =
                          ())
 
                 track (
-                    Proc.shutdown
+                    Process.shutdown
                         "WINWORD"
                         20000
                         beforeWord
@@ -252,7 +252,7 @@ type HostGreetingTest(output: ITestOutputHelper) =
                 )
 
                 track (
-                    Proc.shutdown
+                    Process.shutdown
                         "EXCEL"
                         8000
                         beforeExcel
@@ -291,131 +291,3 @@ type HostGreetingTest(output: ITestOutputHelper) =
 
         Report.conclusion output "通过：Word 说的，Excel 一字不差地收到了"
 
-    [<Fact>]
-    member this.``Excel 和 AutoCAD 打招呼：CAD 没开就不硬起，开了也只写自己新开的图``() =
-        let beforeExcel = Report.procIds "EXCEL"
-        let beforeAcad = Report.procIds "acad"
-        let acadWasRunning = not beforeAcad.IsEmpty
-
-        // 本机没有 AutoCAD 在跑时默认**不新起**：为了一条这次根本不用的通道弹出 CAD 窗口，
-        // 是看不见的副作用。确实要测 AutoCAD 通道，跑之前设 XUNITHOST_LAUNCH_ACAD=1。
-        let useAcad = acadWasRunning || Acad.mayLaunch ()
-
-        Report.title output "Excel → AutoCAD：一句话传过去，只写自己新开的那张图"
-
-        if not useAcad then
-            Report.line output "前提" "本机没有 AutoCAD 在跑"
-            Report.line output "处理" "不替你起一个（真要测这条通道，设 XUNITHOST_LAUNCH_ACAD=1 再跑）"
-            Report.conclusion output "跳过：这条通道这次不测，机器上什么都没动"
-            Assert.Skip "AutoCAD 没在跑；按约定不替用户新建实例"
-        else
-            let excelGreeting = "Hello AutoCAD. -- Excel"
-            let acadGreeting = "AutoCAD 收到。Hello Excel. -- AutoCAD"
-
-            let killed = ResizeArray<string>()
-
-            let track (result: string option) =
-                match result with
-                | Some name -> killed.Add name
-                | None -> ()
-
-            Report.line
-                output
-                "AutoCAD"
-                (if acadWasRunning then
-                     "复用你开着的那只：另开一张临时图，写在那张上；你的图纸不碰"
-                 else
-                     "本次新起的一只")
-
-            Sta.here (fun () ->
-                let excel = ExcelHost.Host.GetOrCreateApplication ()
-
-                // AutoCAD 可能中途崩掉重来，所以每次用都重新取，并留住最后一次拿到的那个供清理
-                let mutable acad: Autodesk.AutoCAD.Interop.AcadApplication = null
-                // 测试新开的那张临时图：收尾关掉，绝不留在用户实例里
-                let mutable acadDoc: obj = null
-                /// 这次自己新建的那本工作簿：收尾也关掉
-                let mutable excelBook: obj = null
-
-                let getAcad () =
-                    let app = AutoCADHost.Host.GetOrCreateApplication ()
-                    acad <- app
-                    app
-
-                let excelAlerts =
-                    try
-                        let original = excel.DisplayAlerts
-                        excel.DisplayAlerts <- false
-                        original
-                    with _ ->
-                        true
-
-                try
-                    // 1. Excel 新建一本、先认人、说一句
-                    let excelId, heard, made = Say.excel excel "" excelGreeting
-                    excelBook <- made
-                    Report.line output "Excel" (Doc.describe excelId)
-                    Report.line output "Excel 说" heard
-
-                    // 2. AutoCAD 新开一张图、先认人、把听到的那句写成 TEXT
-                    let acadId, lastWord, doc = Say.acad getAcad heard acadGreeting
-                    acadDoc <- doc
-                    Report.line output "AutoCAD" (Doc.describe acadId)
-                    Report.line output "AutoCAD 说" lastWord
-
-                    Assert.StartsWith(heard, lastWord)
-                    Assert.Contains(acadGreeting, lastWord)
-                    Report.line output "对照" "CAD 读回来的前一句，跟 Excel 说的逐字相同"
-                finally
-                    // 先把我们新建的工作簿关掉（丢弃改动）
-                    if not (isNull excelBook) then
-                        (try
-                            (excelBook :?> Microsoft.Office.Interop.Excel.Workbook).Close(box false)
-                         with _ ->
-                             ())
-
-                    // 再把我们新开的临时图关掉（不保存）：用户那只 acad 里不该多出一张图
-                    if not (isNull acadDoc) then
-                        (try
-                            (acadDoc :?> Autodesk.AutoCAD.Interop.AcadDocument).Close(box false, Type.Missing)
-                         with _ ->
-                             ())
-
-                    if not (isNull acad) then
-                        // 关图纸 + 退出一律交给 AutoCADHost：它先用 ActiveDocument.Close(false) 丢掉改动，
-                        // 再 Quit。少了这一步，带改动的 Drawing1 会让 Quit 弹出「是否保存」模态框，测试就卡死。
-                        track (Proc.shutdown "acad" 20000 beforeAcad (fun () -> AutoCADHost.Host.QuitWithoutSaving acad))
-
-                    track (
-                        Proc.shutdown
-                            "EXCEL"
-                            8000
-                            beforeExcel
-                            (fun () ->
-                                (try
-                                    excel.DisplayAlerts <- excelAlerts
-                                 with _ ->
-                                     ())
-
-                                ExcelHost.Host.QuitWithoutSaving excel)
-                    ))
-
-            Report.line
-                output
-                "现场"
-                (sprintf "acad %d 个 / EXCEL %d 个" (Report.procIds "acad").Count (Report.procIds "EXCEL").Count)
-
-            Report.line
-                output
-                "收尾"
-                (if killed.Count = 0 then
-                     "都是自己退的，没有对话框卡住"
-                 else
-                     sprintf "%s 没自己退，已结束进程" (String.Join(" / ", killed)))
-
-            Assert.False(
-                killed.Contains "acad",
-                "AutoCAD 二十秒内没退出，被强制结束 —— 退出时多半又弹「是否保存 Drawing1」了"
-            )
-
-            Report.conclusion output "通过：Excel 那句话传到了 CAD，写在自己新开的图上，你的图纸一个字没动"

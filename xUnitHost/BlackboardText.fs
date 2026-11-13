@@ -1,17 +1,51 @@
-﻿/// 【参考实现，不是库的 API】把插件复制到剪贴板的「黑板展示文本」读成结构化参数表 GeneralAppInfo。
+﻿/// 【参考实现，不是库的 API】把插件复制到剪贴板的「黑板展示文本」读成「哪一家 + 哪只进程」。
 ///
-/// 生产库 OsHost 只认 GeneralAppInfo 那张参数表：调用方（插件 / 宿主程序）按字段填报，
-/// 库不认文本、不解析排版。插件改了标题、键名、措辞，只改这一份参考代码，不动库。
-/// 用不上文本源的程序请直接填参数表，进程名取各家专用 Host 的 SelfImage：
-///   GeneralAppInfo.create (WordHost.Host.SelfImage, 27232, "!WordVSTO.Instance.27232", winwordExe)
-/// 文档名 / 路径不在这张表里：要就用 docOfText 另取一条 GeneralDocInfo（只作报告数据）。
-/// 文本里的 HWND 行、采集时间行都不解析：窗口与抄录时刻不属于「这是哪只进程」，表里也没有这两个字段。
-/// 解析出来的字段与手工填报的字段完全相同，四家 GetApplication(info) 分不出来源。
+/// 2026-11-13 起没有「通用参数表」这层抽象了：挂回只认 **pid**，进程名、ROT 名只作报告里的佐证。
+/// 所以这个类型留在测试项目里（`BoardApp` / `BoardDoc`），OsHost 不再认识任何「参数表」概念：
+///   插件改了标题、键名、措辞，只改这一份参考代码，不动库。
+/// 挂回入口一律按进程号：
+///   Word / Excel / AutoCAD → `*Task.GetApplicationAsync pid`，PowerPoint → `PowerPointHost.Host.GetApplication pid`。
+/// 文档名 / 路径不在 BoardApp 里：要就用 docOfText 另取一条 BoardDoc（只作报告数据）。
+/// 文本里的 HWND 行、采集时间行都不解析：窗口与抄录时刻不属于「这是哪只进程」。
 namespace XUnitHost
 
 open System
 open System.Globalization
 open OsHost
+
+/// 黑板抄下来的「哪一家 + 哪只进程」。挂回只用 Pid；Image / Rot 只贴报告。
+type BoardApp =
+    { /// 进程名（Proc.ids 的口径，不带 .exe）
+      Image: string
+      Pid: int
+      /// ROT 注册名；只作佐证，不参与认人
+      Rot: string }
+
+    /// 一行摘要，贴报告 / 报错用
+    member this.describe () : string =
+        sprintf
+            "%s pid=%d rot=%s"
+            (if String.IsNullOrWhiteSpace this.Image then "(没有进程名)" else this.Image)
+            this.Pid
+            (if String.IsNullOrWhiteSpace this.Rot then "-" else this.Rot)
+
+/// 文档信息：插件抄下来的「当前文档名 / 落盘路径」，**只进报告、不参与任何判断**。
+type BoardDoc =
+    { /// 文档名（不含路径），例如「文档1」「Book1」「Drawing1.dwg」
+      Name: string option
+      /// 落盘路径；新文档还没存过盘就是 None
+      Path: string option }
+
+    static member empty : BoardDoc = { Name = None; Path = None }
+
+    /// 一行摘要，贴报告用
+    member this.describe () : string =
+        let show (value: string option) =
+            match value with
+            | Some text when not (String.IsNullOrWhiteSpace text) -> text
+            | _ -> "(无)"
+
+        sprintf "名字=%s 路径=%s" (show this.Name) (show this.Path)
 
 module internal BlackboardText =
 
@@ -44,14 +78,13 @@ module internal BlackboardText =
                 None)
         |> Option.defaultValue ""
 
-    /// 认出是哪一家 → 取那家专用 Host 上的进程名（现在表里只有进程名，没有种类标记）。
+    /// 认出是哪一家 → 取那家专用 Host 上的进程名
     let private imageOfLine (lines: string array) : string option =
         match valueOf "KIND" lines with
         | Some value when contains "word" value -> Some WordHost.Host.SelfImage
         | Some value when contains "excel" value -> Some ExcelHost.Host.SelfImage
         | Some value when contains "ppt" value || contains "powerpoint" value ->
             Some PowerPointHost.Host.SelfImage
-        | Some value when contains "acad" value -> Some AutoCADHost.Host.SelfImage
         | _ -> None
 
     /// 从插件的标题 / ROT 名 / EXE 路径认是哪一家
@@ -62,8 +95,6 @@ module internal BlackboardText =
             Some ExcelHost.Host.SelfImage
         elif contains "PowerPointVSTO" text || contains "PPTVSTO" text || contains "POWERPNT" text then
             Some PowerPointHost.Host.SelfImage
-        elif contains "AcadVSTO" text || contains "AutoCAD" text || contains "ACAD.EXE" text then
-            Some AutoCADHost.Host.SelfImage
         else
             None
 
@@ -83,7 +114,7 @@ module internal BlackboardText =
     let private docPath (lines: string array) : string option =
         valueOf "路径" lines |> optional |> Option.bind Paths.canonical
 
-    /// 标题行只给人看，不进参数表；单独留一个函数是为了写报告时能贴原文。
+    /// 标题行只给人看，不进任何结构；单独留一个函数是为了写报告时能贴原文。
     let caption (text: string) : string =
         text.Replace("\r\n", "\n").Split '\n'
         |> Array.map(fun line -> line.Trim())
@@ -96,21 +127,20 @@ module internal BlackboardText =
         |> Array.map(fun line -> line.Trim())
         |> Array.filter(fun line -> not (String.IsNullOrWhiteSpace line))
 
-    /// 文档信息：与识别进程的 GeneralAppInfo **分开**拿。缺键 /「(未保存)」都当没有，
+    /// 文档信息：与识别进程分开拿。缺键 /「(未保存)」都当没有，
     /// 认不出也不报错 —— 它只用来贴报告，不参与认人。
-    let docOfText (text: string) : GeneralDocInfo =
+    let docOfText (text: string) : BoardDoc =
         if String.IsNullOrWhiteSpace text then
-            GeneralDocInfo.empty
+            BoardDoc.empty
         else
             let lines = linesOf text
-            GeneralDocInfo.create (docName lines, docPath lines)
+            { Name = docName lines; Path = docPath lines }
 
-    /// 参考解析：插件剪贴板原文 / 会话里贴的一段 / 存下来的 txt → GeneralAppInfo 参数表。
-    /// 只填认进程的字段；文档名 / 路径走 docOfText；采集时间行不解析（不是进程的属性）。
+    /// 参考解析：插件剪贴板原文 / 会话里贴的一段 / 存下来的 txt → BoardApp。
     /// 缺 PID / 认不出哪一家，一律 Error —— 信息不完整就不该往下走。
-    /// 注意这里只是「把展示文本填成参数表」，真正的现场校验在 OsHost.GeneralAppInfo.verify；
+    /// 注意这里只是「把展示文本填成字段」，真正的现场核对在各家 Host 的 checkPid / findOnSta；
     /// 文档级交接检查按用户要求推迟（2026-11-07 13:51），暂不做。
-    let ofText (text: string) : Result<GeneralAppInfo, string> =
+    let ofText (text: string) : Result<BoardApp, string> =
         if String.IsNullOrWhiteSpace text then
             Error "黑板信息是空的"
         else
@@ -135,9 +165,7 @@ module internal BlackboardText =
                 Error "黑板信息里没有有效 PID：不猜、不新建"
             else
                 Ok(
-                    GeneralAppInfo.create
-                        (image.Value,
-                         pid,
-                         valueOf "ROT" lines |> Option.defaultValue "",
-                         exeLine lines)
+                    { Image = image.Value
+                      Pid = pid
+                      Rot = valueOf "ROT" lines |> Option.defaultValue "" }
                 )

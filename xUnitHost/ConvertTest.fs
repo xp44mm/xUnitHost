@@ -494,7 +494,7 @@ type ConvertBatchTest(output: ITestOutputHelper) =
             Report.conclusion output "通过：Convert.all 认得 .ppt，转完读回逐字比对，原件一个字没动"
         finally
             let leftovers = Set.difference (Report.procIds "POWERPNT") beforeProc
-            if not leftovers.IsEmpty then OsHost.Proc.kill leftovers
+            if not leftovers.IsEmpty then OsHost.Process.kill leftovers
             (try Directory.Delete(dir, true) with _ -> ())
 
     [<Fact>]

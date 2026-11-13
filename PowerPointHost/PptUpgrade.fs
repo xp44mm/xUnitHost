@@ -32,32 +32,33 @@ module PptToPptx =
         let body () =
             pres <- PptIO.openPpt app source false
 
-            // 守卫：带宏的 .ppt 存成 .pptx 会把 VBA 悄悄扔掉，这单不接。
-            // 分派本该把它送去 PptToPptm，这里再挡一道，防的是漏判。
-            if PptIO.hasVba pres then
-                (target, "失败", "这份 .ppt 带 VBA 宏，不该存成 .pptx；原件保留")
+            // 老 .ppt 里的 VBA 工程只作报告用，**不再拦路**：
+            // 2026-11-11 用户定「PowerPoint 的宏不留，直接存 .pptx」。
+            let hadProject = PptIO.hasVba pres
+
+            exists <- File.Exists target
+
+            // 已有同名新文件：先转到临时文件，跟原件比完再删
+            stage <- PptIO.stageFor exists target
+
+            let before = PptIO.slidePrint pres
+            PptIO.savePptAs format pres stage
+            PptIO.closePpt pres
+            pres <- null
+
+            back <- PptIO.openPpt app stage true
+            let after = PptIO.slidePrint back
+            PptIO.closePpt back
+            back <- null
+
+            let macroNote = if hadProject then "（原件带 VBA 工程，按既定口径不保留）" else ""
+
+            if before <> after then
+                (target, "失败", sprintf "幻灯片文字对不上（原件 %d 字符指纹 / 新文件 %d），原件保留" before.Length after.Length)
+            elif exists then
+                (target, "已有·一致", "现有 pptx 的幻灯片文字与原件一致" + macroNote)
             else
-                exists <- File.Exists target
-
-                // 已有同名新文件：先转到临时文件，跟原件比完再删
-                stage <- PptIO.stageFor exists target
-
-                let before = PptIO.slidePrint pres
-                PptIO.savePptAs format pres stage
-                PptIO.closePpt pres
-                pres <- null
-
-                back <- PptIO.openPpt app stage true
-                let after = PptIO.slidePrint back
-                PptIO.closePpt back
-                back <- null
-
-                if before <> after then
-                    (target, "失败", sprintf "幻灯片文字对不上（原件 %d 字符指纹 / 新文件 %d），原件保留" before.Length after.Length)
-                elif exists then
-                    (target, "已有·一致", "现有 pptx 的幻灯片文字与原件一致")
-                else
-                    (target, "转了", sprintf "幻灯片文字 %d 字符，一字不差" after.Length)
+                (target, "转了", sprintf "幻灯片文字 %d 字符，一字不差%s" after.Length macroNote)
 
         // F# 不允许 try/with/finally 写在一起：结果先算出来，收尾单独做
         let outcome =
@@ -133,9 +134,10 @@ module PptToPptm =
         outcome
 
 /// 统一入口：把一份 .ppt 升级成新格式。
-/// 判有没有 VBA 宏 → 有宏走 PptToPptm（.pptm，保宏），没宏走 PptToPptx（.pptx）；
-/// 判不出来就报失败、原件保留，绝不猜「没宏」（猜错会悄悄丢宏）。
-/// 判宏和选路都收在 PowerPointHost 里，测试项目只负责批量和结果记录。
+/// **2026-11-11 用户定：PowerPoint 的宏一律不保留，统一存 .pptx**（格式码 24）。
+/// 原来按 `HasVBProject` 分派「有宏走 .pptm 保宏」，与 Word 那边同一个死结：
+/// 老文件的工程多半是空壳或被「锁定工程」保护，另存 .pptm 也搬不走，只会白卡一批文件。
+/// `PptToPptm` 那条路还留着（`XUNITHOST_PPT_KEEP_MACRO=1` 才走），备将来真要保宏时用。
 module PptUpgrade =
 
     /// 升级走哪条路，由有没有宏唯一决定（纯规则，不碰 COM，测试可直接验）
@@ -145,16 +147,26 @@ module PptUpgrade =
 
     let route (hasMacro: bool) : Route = if hasMacro then Pptm else Pptx
 
+    /// 要不要按「保宏」走 .pptm：默认不要（用户口径），显式设环境变量才要
+    let keepMacro () =
+        match Environment.GetEnvironmentVariable "XUNITHOST_PPT_KEEP_MACRO" with
+        | null
+        | "" -> false
+        | text -> text.Trim() = "1"
+
     /// **pptUpgrade**：一份 .ppt → 新格式。返回 (真正落盘的目标, 状态, 详情)。
-    /// 调用方负责给它一个 PowerPoint Application（一般用 `Host.execQuery` 起的那只）。
+    /// 调用方负责给它一个 PowerPoint Application（挂回式通道里是用户那只常驻实例）。
     let pptUpgrade (app: Application) (source: string) : string * string * string =
-        match PptIO.detectMacro app source with
-        | Ok hasMacro ->
-            match route hasMacro with
-            | Pptm -> PptToPptm.convert app source
-            | Pptx -> PptToPptx.convert app source
-        | Error message ->
-            (PptToPptx.targetOf source, "失败", "判不出有没有 VBA 宏，原件保留：" + message)
+        if not (keepMacro ()) then
+            PptToPptx.convert app source
+        else
+            match PptIO.detectMacro app source with
+            | Ok hasMacro ->
+                match route hasMacro with
+                | Pptm -> PptToPptm.convert app source
+                | Pptx -> PptToPptx.convert app source
+            | Error message ->
+                (PptToPptx.targetOf source, "失败", "判不出有没有 VBA 宏，原件保留：" + message)
 
     /// 与 `DocUpgrade.convert` / `XlsUpgrade.convert` 对齐的别名：批量分派可以直接照旧调 `convert`
     let convert = pptUpgrade

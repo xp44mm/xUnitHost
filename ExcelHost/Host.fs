@@ -18,25 +18,8 @@ module Host =
     [<Literal>]
     let private ProgId = "Excel.Application"
 
-    let private progIds = [ ProgId ]
-
-    /// 有实例就返回那个实例，没有就新建一个并返回新建的。
-    /// 新建的实例会补一张空白工作簿：一个工作簿都没有的自动化实例会自己退出。
-    ///
-    /// 这是**对外签约**用的：可以真的起一个进程。按地址回来（harness 内部交接）别用它 —— 用 `TryGetRunningApplication`。
-    let GetOrCreateApplication () : Application =
-        match Com.running progIds with
-        | Some running -> running :?> Application
-        | None ->
-            let app = Com.create progIds :?> Application
-
-            (try
-                if app.Workbooks.Count = 0 then
-                    app.Workbooks.Add() |> ignore
-             with _ ->
-                 ())
-
-            app
+    /// ROT 直取 / 一次性命令 / 起或取（`ExcelTask.getOrCreateOnSta`）共用这一份 ProgID
+    let progIds = [ ProgId ]
 
     /// 只接现有的：ROT 里有就交出来，没有就是 None —— **绝不新建**（也就不补空白工作簿）。
     ///
@@ -45,10 +28,10 @@ module Host =
     let TryGetRunningApplication () : Application option =
         Com.running progIds |> Option.map(fun value -> value :?> Application)
 
-    // ---------------- 黑板模式：按 GeneralAppInfo 挂回现成的那一只 ----------------
+    // ---------------- 黑板模式：按进程号挂回现成的那一只 ----------------
 
-    /// 这家 host 的进程名：填 GeneralAppInfo 的 Image 就用它（Proc.ids 的口径，不带 .exe）。
-    /// 旧路（AppInfo / AppKind）与并存的 Host.General 子模块都已撤掉，这里就是唯一的 GetApplication。
+    /// 这家 host 的进程名：Proc.ids 的口径，不带 .exe（checkPid 用它核实「确实是 EXCEL」）。
+    /// 黑板只把「进程号」交过来；进程名以这里为准（checkPid 用它核实）。
     let SelfImage : string = "EXCEL"
 
     /// 这只 Excel 的进程号（Excel 的 Application 自己有 Hwnd，一问就到）
@@ -58,23 +41,63 @@ module Host =
         with _ ->
             None
 
-    /// 按插件抄下来的 GeneralAppInfo 精确挂回那一只 Excel 实例。
-    /// 只附着、不新建、不 Quit、不改应用状态 —— 黑板的生命周期不归这儿管。
-    /// 返回的 Application 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
-    /// 信息过时 / ROT 里没有这个名字 / 认错进程，一律 Error。
-    /// 文档级交接检查（换了工作簿 / 采集后存过盘等）按用户要求推迟，暂不做；
-    /// 工作簿名 / 路径本来就不在 info 里（GeneralDocInfo 单列），认人只看进程身份。
-    let GetApplication (info: GeneralAppInfo) : Result<Application, string> =
-        GeneralAppInfo.attach info progIds (fun raw ->
-            try
-                let app = raw :?> Application
+    // ---------------- 按进程号挂回（判定链） ----------------
+    // 能唯一确定一只实例的只有 Pid，所以这是唯一的挂回入口。
+    // 与 AutoCADHost.Application 同一口径：
+    //   · 只认现成对象 —— 绝不 CoCreateInstance、绝不 GetOrCreateApplication、绝不 Quit；
+    //   · 认人靠 `Application.Hwnd` → PID 硬核对，对不上就是 None，不猜；
+    //   · PID 闸门是**同步**做的：不合格立刻交回已完成且 faulted 的 Task，连 STA 队列都不排。
+    // 隐藏跑的自动化实例 Hwnd 可能是 0，认不出就不认 —— 这种连 ROT 名也帮不上，只报错不新建。
+    //
+    // 成品 Task 入口在 ExcelTask.fs（GetApplicationAsync）；这里的 checkPid / findOnSta / unwrap
+    // 就是它走下去的那条链，所以公开 —— 除它之外没有别的调用方。
 
-                match pidOf app with
-                | Some number when number <> info.Pid ->
-                    Error(sprintf "获取到的 PID %d 与给定的 PID %d 不符" number info.Pid)
-                | _ -> Ok app
-            with ex ->
-                Error(Errors.explain ex))
+    /// obj → Application，并用 Hwnd → PID 硬核对。不是 Excel / pid 对不上一律 None。
+    let private matchApp (pid: int) (raw: obj) : Application option =
+        try
+            let app = raw :?> Application
+
+            if obj.ReferenceEquals(app, null) then
+                None
+            elif pidOf app = Some pid then
+                Some app
+            else
+                None
+        with _ ->
+            None
+
+    /// 只认现成对象：ProgID 直取没对上就扫一遍 ROT，都没有就是 Error。
+    /// 必须在 Sta.run / Sta.runAsync 那条固定 STA 线程上调用（由 ExcelTask.GetApplicationAsync 包好）。
+    let findOnSta (pid: int) : Result<Application, string> =
+        match Com.running progIds |> Option.bind(matchApp pid) with
+        | Some app -> Ok app
+        | None ->
+            let entries = Com.runningEntries ()
+
+            match entries |> List.tryPick(fun (_, raw) -> matchApp pid raw) with
+            | Some app -> Ok app
+            | None ->
+                Error(
+                    sprintf
+                        "ROT 里没有 PID %d 的 Excel 自动化对象（ProgID 直取没对上，另扫了 %d 条登记项）：可能是启动中 / 隐藏实例没在主窗口上登记 / 尚未注册；绝不新建"
+                        pid
+                        entries.Length
+                )
+
+    /// 前置闸门：PID 有效，且确实是正在运行的 EXCEL 进程。纯查进程表，不碰 COM —— 自检能离线跑到这一层。
+    let checkPid (pid: int) : Result<unit, string> =
+        if pid <= 0 then
+            Error "PID 必须大于 0：不猜、不新建"
+        elif not (Process.ids SelfImage |> Set.contains pid) then
+            Error(sprintf "PID %d 不是正在运行的 %s 进程：拒绝挂回，绝不新建" pid SelfImage)
+        else
+            Ok()
+
+    /// 挂不回就是 faulted Task，await 时抛 InvalidOperationException（外层不再包 Result）
+    let unwrap (result: Result<'T, string>) : 'T =
+        match result with
+        | Ok value -> value
+        | Error message -> raise (InvalidOperationException(message) :> exn)
 
     // ---------------- 认自己是谁 ----------------
     // 地址里的指纹就是从这儿来的：哪个进程、锚定哪本工作簿、那本工作簿最后什么时候存的。
@@ -94,7 +117,7 @@ module Host =
                 None, false
 
         { Pid = pid
-          StartedMs = Proc.startedMs pid |> Option.defaultValue 0L
+          StartedMs = Process.startedMs pid |> Option.defaultValue 0L
           DocPath = path
           SavedMs = Paths.savedMs path
           Dirty = dirty }
@@ -208,11 +231,11 @@ module Host =
 
     /// 起一个新的 Excel → 跑 work → 关掉退出。已有实例在跑就返回 Error（绝不碰用户的实例）。
     let private runOnce (work: Application -> 'T) : Result<'T, string> =
-        Sta.here (fun () ->
+        STA.here (fun () ->
             match Com.running progIds with
             | Some _ -> Error "本机已有 Excel 在运行：一次性命令要求它先退干净，否则会碰你手上的表"
             | None ->
-                let before = Proc.ids "EXCEL"
+                let before = Process.ids "EXCEL"
 
                 match
                     (try
@@ -222,7 +245,7 @@ module Host =
                 with
                 | Error message -> Error message
                 | Ok app ->
-                    let pids = Set.difference (Proc.ids "EXCEL") before
+                    let pids = Set.difference (Process.ids "EXCEL") before
                     let previousSecurity = quieten app
 
                     let outcome =
@@ -240,7 +263,7 @@ module Host =
                          ())
 
                     release app
-                    Proc.kill (Proc.waitGone "EXCEL" pids 10000)
+                    Process.kill (Process.waitGone "EXCEL" pids 10000)
                     outcome)
 
     /// 一次性执行，只关心成败（异常原因以 Error 返回，不向上抛）。

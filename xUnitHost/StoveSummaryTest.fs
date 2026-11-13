@@ -1,4 +1,4 @@
-/// 热风炉计算书摘要：先把「焦炉煤气燃烧计算书.xlsx」整本只读转储成 TSV，
+﻿/// 热风炉计算书摘要：先把「焦炉煤气燃烧计算书.xlsx」整本只读转储成 TSV，
 /// 有了真值再往 Word 里写摘要（摘要里每一个数都来自这次转储，不凭记忆）。
 ///
 /// 只读：按 PID 挂回用户正开着的那只 Excel，一个格都不改、不 Save、不 Quit。
@@ -184,12 +184,12 @@ type StoveSummaryTest(output: ITestOutputHelper) =
             | _ -> failwithf "XUNITHOST_EXCEL_PID 不是整数：%s" pidText
 
         let app = ExcelHost.ExcelTask.GetApplicationAsync pid |> Report.await
-        let back = Sta.run (fun () -> ExcelHost.Host.pidOf app)
+        let back = STA.run (fun () -> ExcelHost.Host.pidOf app)
         Should.equal (Some pid) back
         Report.line output "挂回" (sprintf "PID %d（只读，不新建、不 Save、不 Quit）" pid)
 
         let lines, sheets =
-            Sta.run (fun () ->
+            STA.run (fun () ->
                 let book =
                     [ 1 .. (try app.Workbooks.Count with _ -> 0) ]
                     |> List.map (fun i -> app.Workbooks.Item(i))
@@ -276,7 +276,7 @@ type StoveSummaryTest(output: ITestOutputHelper) =
         Report.title output "计算书摘要　认人：Word 现在开着哪一份"
 
         let docs =
-            Sta.run (fun () ->
+            STA.run (fun () ->
                 match WordHost.Host.TryGetRunningApplication() with
                 | None -> []
                 | Some app ->
@@ -344,7 +344,7 @@ type StoveSummaryTest(output: ITestOutputHelper) =
 
         // 2. 在固定 STA 线程上挂回现成 Word、找到那一份、重写
         let result =
-            Sta.run (fun () ->
+            STA.run (fun () ->
                 let app =
                     match WordHost.Host.TryGetRunningApplication() with
                     | Some a -> a

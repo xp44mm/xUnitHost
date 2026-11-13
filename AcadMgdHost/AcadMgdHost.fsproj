@@ -23,6 +23,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- 公用日志：Commands.fs 与 Star.fs 都用它，故排在最前 -->
+    <Compile Include="Probe.fs" />
+    <!-- 五角星：先算纯几何，再建模 / 另存；Commands.fs 用到 Star，故排在它之前 -->
+    <Compile Include="StarGeometry.fs" />
+    <Compile Include="Star.fs" />
     <Compile Include="Commands.fs" />
     <!-- 程序集级 ExtensionApplication 属性必须在编译顺序最后一个文件 -->
     <Compile Include="AssemblyInfo.fs" />
@@ -40,7 +45,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="10.1.403" />
+    <PackageReference Update="FSharp.Core" Version="11.0.101" />
   </ItemGroup>
 
 </Project>

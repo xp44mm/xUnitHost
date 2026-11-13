@@ -17,6 +17,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- PowerPointVSTO 的 ROT 名：前缀固化在这一家，通用的切 / 拼在 OsHost.Rot -->
+    <Compile Include="Rot.fs" />
     <Compile Include="Host.fs" />
     <!-- 末尾：PptToPptx / PptToPptm / PptUpgrade 三个入口合在一份文件里；PptIO 是共用 COM 细节 -->
     <Compile Include="PptIO.fs" />
@@ -41,7 +43,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="10.1.403" />
+    <PackageReference Update="FSharp.Core" Version="11.0.101" />
   </ItemGroup>
 
 </Project>

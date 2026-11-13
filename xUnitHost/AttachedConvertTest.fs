@@ -7,7 +7,7 @@
 ///   · 只逐份开/关自己那份工作簿，绝不用 CloseAllWorkbooksWithoutSaving（那会关掉用户开着的表）；
 ///   · 应用级开关（DisplayAlerts / AskToUpdateLinks / AutomationSecurity）临时改、用完恢复原值；
 ///   · **借用进程**：黑板说的是「那只常驻 Excel」，不是「它当时开的哪份工作簿」。
-///     表里本来就只有进程身份（进程名 / PID / ROT / EXE），开/关自己的文件不会断链；
+///     挂回只认 PID（进程名 / ROT 只贴报告），开/关自己的文件不会断链；
 ///   · 用户开着几本工作簿不归这条通道管，不断言数量；只核自己打开的那一本已关掉、没留垃圾。
 namespace XUnitHost
 
@@ -18,11 +18,11 @@ open FSharp.xUnit
 open Microsoft.Office.Core
 open OsHost
 
-/// 黑板文本 → 参数表 → 挂回；两条 Fact 共用这一串
+/// 黑板文本 → 挂回；两条 Fact 共用这一串
 module private Attached =
 
-    /// 黑板文本 → 认进程的表 + 文档信息（读一次文件，两边都从同一段文本解析）
-    let board () : Result<GeneralAppInfo * GeneralDocInfo, string> =
+    /// 黑板文本 → 「哪一家 + 哪只进程」+ 文档信息（读一次文件，两边都从同一段文本解析）
+    let board () : Result<BoardApp * BoardDoc, string> =
         let file = Environment.GetEnvironmentVariable "XUNITHOST_BLACKBOARD_FILE"
 
         if String.IsNullOrWhiteSpace file then
@@ -33,18 +33,17 @@ module private Attached =
             let text = File.ReadAllText file
             BlackboardText.ofText text |> Result.map(fun info -> info, BlackboardText.docOfText text)
 
-    let info () : Result<GeneralAppInfo, string> = board () |> Result.map fst
+    let info () : Result<BoardApp, string> = board () |> Result.map fst
 
     type App = Microsoft.Office.Interop.Excel.Application
 
-    /// 借用那只常驻进程：表里已经没有窗口句柄这类「谁当时开着什么」的字段，
-    /// 参数表能落到实处的只有 Pid，原样交给 attach 即可。
-    let borrow (info: GeneralAppInfo) : GeneralAppInfo = info
+    /// 借用那只常驻进程：挂回只认 Pid，进程名 / ROT 名只贴报告。
+    let borrow (info: BoardApp) : BoardApp = info
 
     /// 挂回那只常驻 Excel：只认进程号，只附着、不新建。
     /// 这一层把 Task 等成 Result —— 失败原因要原样贴进报告（拒接的是哪条，一眼看见）。
     /// 调用点都在测试线程（不在 Sta.run 的活儿里），在外面等 Task 不会自己等自己。
-    let attach (info: GeneralAppInfo) : Result<App, string> =
+    let attach (info: BoardApp) : Result<App, string> =
         try
             Ok(ExcelHost.ExcelTask.GetApplicationAsync info.Pid |> Report.await)
         with ex ->
@@ -73,9 +72,9 @@ module private Attached =
 
     type WordApp = Microsoft.Office.Interop.Word.Application
 
-    /// Word 的挂回参数：优先黑板文件（插件抄的），没设就按 XUNITHOST_WORD_PID 现造一张。
-    /// Rot 留空 → 按 ProgID（Word.Application）从 ROT 取现成那一只：绝不枚举、绝不新建。
-    let wordInfo () : Result<GeneralAppInfo, string> =
+    /// Word 的挂回参数：优先黑板文件（插件抄的），没设就按 XUNITHOST_WORD_PID 现造一条。
+    /// 挂回只认 Pid；进程名 / ROT 名只贴报告。
+    let wordInfo () : Result<BoardApp, string> =
         match Environment.GetEnvironmentVariable "XUNITHOST_BLACKBOARD_FILE" with
         | null
         | "" ->
@@ -85,7 +84,10 @@ module private Attached =
             | text ->
                 match Int32.TryParse text with
                 | true, pid when pid > 0 ->
-                    Ok(GeneralAppInfo.create ("WINWORD", pid, "", (Proc.exePath pid |> Option.defaultValue "")))
+                    Ok
+                        { Image = "WINWORD"
+                          Pid = pid
+                          Rot = "" }
                 | _ -> Error(sprintf "XUNITHOST_WORD_PID 不是有效进程号：%s" text)
         | file ->
             if File.Exists file then
@@ -164,13 +166,95 @@ module private Attached =
         with _ ->
             -1
 
+    // ---------------- PowerPoint 侧：同样只挂回现成那只，逐份开/关自己那份 ----------------
+
+    type PptApp = Microsoft.Office.Interop.PowerPoint.Application
+
+    /// PowerPoint 的挂回参数：优先黑板文件（插件抄的），没设就按 XUNITHOST_PPT_PID 现造一条。
+    let pptInfo () : Result<BoardApp, string> =
+        match Environment.GetEnvironmentVariable "XUNITHOST_BLACKBOARD_FILE" with
+        | null
+        | "" ->
+            match Environment.GetEnvironmentVariable "XUNITHOST_PPT_PID" with
+            | null
+            | "" -> Error "没设 XUNITHOST_PPT_PID（或 XUNITHOST_BLACKBOARD_FILE）：把常驻 PowerPoint 的进程号给我"
+            | text ->
+                match Int32.TryParse text with
+                | true, pid when pid > 0 ->
+                    Ok
+                        { Image = "POWERPNT"
+                          Pid = pid
+                          Rot = "" }
+                | _ -> Error(sprintf "XUNITHOST_PPT_PID 不是有效进程号：%s" text)
+        | file ->
+            if File.Exists file then
+                File.ReadAllText file |> BlackboardText.ofText
+            else
+                Error(sprintf "黑板文件不存在：%s" file)
+
+    /// 挂回那只常驻 PowerPoint（只认进程号；只附着、不新建、不 Quit）。
+    let attachPpt (pid: int) : Result<PptApp, string> = PowerPointHost.Host.GetApplication pid
+
+    /// PowerPoint 侧临时开关：确认框压掉、宏一律不跑，收尾按原值恢复。
+    /// **不碰 Visible** —— PowerPoint 不允许把 Visible 设成 msoFalse。
+    type PptQuiet =
+        { Alerts: Microsoft.Office.Interop.PowerPoint.PpAlertLevel option
+          Security: MsoAutomationSecurity option }
+
+    let quietPpt (app: PptApp) : PptQuiet =
+        let before =
+            { Alerts = (try Some app.DisplayAlerts with _ -> None)
+              Security = PowerPointHost.Host.Security.apply app }
+
+        (try
+            app.DisplayAlerts <- Microsoft.Office.Interop.PowerPoint.PpAlertLevel.ppAlertsNone
+         with _ ->
+             ())
+
+        before
+
+    let restorePpt (app: PptApp) (before: PptQuiet) : unit =
+        (match before.Alerts with
+         | Some value ->
+             (try
+                 app.DisplayAlerts <- value
+              with _ ->
+                  ())
+         | None -> ())
+
+        PowerPointHost.Host.Security.restore app before.Security
+
+    /// 实例里现在有几份演示文稿（用户自己也开着的话一起算，只当报告数据）
+    let presCount (app: PptApp) : int =
+        try
+            app.Presentations.Count
+        with _ ->
+            -1
+
+    /// 实例里还挂着我本轮打开过的演示文稿吗（按 FullName 认，用户那几份不碰）。-1 = 数不出来。
+    let ownPresLeft (app: PptApp) (sources: Set<string>) : int =
+        try
+            let mutable n = 0
+
+            for k in 1 .. app.Presentations.Count do
+                let full =
+                    try
+                        app.Presentations.Item(k).FullName
+                    with _ ->
+                        ""
+
+                if full <> "" && sources.Contains(full.ToLowerInvariant()) then
+                    n <- n + 1
+
+            n
+        with _ ->
+            -1
+
     /// 文件字节指纹：还原原件、判断 Excel 有没有把原件改写掉
     let md5 (path: string) =
         use stream = File.OpenRead path
         use alg = System.Security.Cryptography.MD5.Create()
-        System.Convert.ToHexString(alg.ComputeHash stream)
-
-    /// 收尾时实例里还挂着我本轮打开过的文件吗（按 FullName 认，别碰用户那本）。
+        System.Convert.ToHexString(alg.ComputeHash stream)    /// 收尾时实例里还挂着我本轮打开过的文件吗（按 FullName 认，别碰用户那本）。
     /// -1 = 数不出来，此时只报告、不判失败。
     let ownBooksLeft (app: App) (sources: Set<string>) : int =
         try
@@ -231,63 +315,44 @@ module private Attached =
 type AttachedConvertTest(output: ITestOutputHelper) =
 
     [<Fact>]
-    member this.``借用进程：只认进程身份，表里没有窗口和采集时刻``() =
-        Report.title output "借用进程：只认进程名/PID/EXE/ROT 后缀，窗口句柄与采集时刻都不在表里"
+    member this.``借用进程：只认进程号，进程名与 ROT 只作报告``() =
+        Report.title output "借用进程：挂回只认 PID，其余字段只贴报告"
 
         let info = Attached.info () |> Report.ok
         let borrowed = Attached.borrow info
 
-        let deadPid = { borrowed with Pid = 999999 }
-        let wrongRot = { borrowed with Rot = "!ExcelVSTO.Instance.999999" }
-        let wrongExe = { borrowed with ExePath = @"C:\nowhere\OTHER.EXE" }
-        let noImage = { borrowed with Image = "" }
-
         Report.line output "黑板原值" (info.describe())
-        Report.line output "挂回用表" (borrowed.describe())
-        Report.line output "口径" "窗口句柄、采集时刻都不参与判断（字段已删）：只核进程名 / PID 存活 / EXE / ROT 后缀"
+        Report.line output "现场" (sprintf "%s 进程 %A" info.Image (Set.toList (Report.procIds info.Image)))
+        Report.line output "口径" "挂回只认 PID：进程名 / ROT 名进报告，不参与判断"
 
-        let verdict (label: string) (table: GeneralAppInfo) =
-            match GeneralAppInfo.verify table with
-            | Ok() -> Report.line output label "放行"
-            | Error message -> Report.line output label ("拒接：" + message)
+        Should.equal true (info.Pid > 0)
+        Should.equal true (Set.contains info.Pid (Report.procIds info.Image))
 
-        verdict "挂回用表" borrowed
-        verdict "PID 不在" deadPid
-        verdict "ROT 后缀不符" wrongRot
-        verdict "EXE 不符" wrongExe
-        verdict "进程名为空" noImage
+        // 进程不在：闸门同步拒绝，连 STA 队列都不排
+        let dead = { borrowed with Pid = 999999 }
+        let deadWork = ExcelHost.ExcelTask.GetApplicationAsync dead.Pid
 
-        let isOk table =
-            match GeneralAppInfo.verify table with
-            | Ok() -> true
-            | _ -> false
+        Report.line output "死 PID" (sprintf "PID %d　IsCompleted=%b IsFaulted=%b" dead.Pid deadWork.IsCompleted deadWork.IsFaulted)
+        Should.equal true deadWork.IsCompleted
+        Should.equal true deadWork.IsFaulted
 
-        let isRefused (word: string) table =
-            match GeneralAppInfo.verify table with
-            | Error message -> message.Contains word
-            | _ -> false
+        // PID ≤ 0：同样就地拒绝
+        let badWork = ExcelHost.ExcelTask.GetApplicationAsync 0
 
-        // EXE 这一条：本机若能读到进程路径就必须因不符而拒接；读不到（Proc.exePath = None）时该检查自然跳过。
-        let exeReadable = (Proc.exePath borrowed.Pid).IsSome
-        let exeVerdict = GeneralAppInfo.verify wrongExe
+        Report.line output "PID 0" (sprintf "IsCompleted=%b IsFaulted=%b" badWork.IsCompleted badWork.IsFaulted)
+        Should.equal true badWork.IsCompleted
+        Should.equal true badWork.IsFaulted
 
-        Should.equal true (isOk borrowed)
-        Should.equal true (isRefused "已经不在运行" deadPid)
-        Should.equal true (isRefused "ROT" wrongRot)
-        Should.equal true (if exeReadable then isRefused "EXE" wrongExe else isOk wrongExe)
-        Should.equal true (isRefused "Image" noImage)
-        Report.line output "EXE 路径" (sprintf "本机可读=%b，判定=%A" exeReadable exeVerdict)
-
-        Report.conclusion output "通过：进程身份四条一条不少，PID/ROT/EXE/进程名不对就拒接；纯逻辑，不碰真机、不动文件"
+        Report.conclusion output "通过：只认进程号；死 PID / 非正 PID 就地拒接，绝不新建"
 
     [<Fact>]
-    member this.``常驻 Excel：按参数表挂回，只读核对，一个文件都不动``() =
+    member this.``常驻 Excel：按 Pid 挂回，只读核对，一个文件都不动``() =
         let info, doc = Attached.board () |> Report.ok
         let borrowed = Attached.borrow info
         let before = Report.procIds info.Image
 
-        Report.title output "常驻 Excel：黑板参数表（只取 Pid）→ GetApplicationAsync 挂回（只读）"
-        Report.line output "参数表" (info.describe())
+        Report.title output "常驻 Excel：黑板信息（只取 Pid）→ GetApplicationAsync 挂回（只读）"
+        Report.line output "黑板" (info.describe())
         Report.line output "文档" (doc.describe())
         Report.line output "交接" (sprintf "借用那只常驻进程，表里只有进程身份；挂回用表 %s" (borrowed.describe()))
         Report.line output "现场" (sprintf "%s 进程 %A" info.Image (Set.toList before))
@@ -304,7 +369,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
         let app = attached |> Report.ok
 
         let probe =
-            Sta.run(fun () ->
+            STA.run(fun () ->
                 let books = (try app.Workbooks.Count with _ -> -1)
                 let alerts = (try app.DisplayAlerts with _ -> false)
                 let security = (try int app.AutomationSecurity with _ -> -1)
@@ -352,7 +417,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                 |> Set.ofList
 
             Report.title output "常驻 Excel：挂回式升级 .xls，核对通过才把原件送回收站"
-            Report.line output "参数表" (info.describe())
+            Report.line output "黑板" (info.describe())
             Report.line output "交接" (sprintf "借用那只常驻进程，表里只有进程身份；挂回用表 %s" (borrowed.describe()))
             Report.line output "本轮" (sprintf "%d 份 .xls（默认 1 张，XUNITHOST_CONVERT_LIMIT 可放大）" items.Length)
             Report.line output "备份目录" backup
@@ -378,7 +443,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
             Report.line output "挂回" (sprintf "pid=%d rot=%s（校验只用进程身份）" info.Pid info.Rot)
 
             let run =
-                Sta.run(fun () ->
+                STA.run(fun () ->
                     let booksBefore = (try app.Workbooks.Count with _ -> -1)
                     let quiet = Attached.quieten app
                     let appliedAlerts = (try app.DisplayAlerts with _ -> true)
@@ -648,7 +713,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                 else "其它"
 
             Report.title output "常驻 Excel：逐份升级，成功一份送走一份"
-            Report.line output "参数表" (info.describe())
+            Report.line output "黑板" (info.describe())
             Report.line output "交接" (sprintf "借用那只常驻进程，表里只有进程身份；挂回用表 %s" (borrowed.describe()))
             Report.line output "本轮" (sprintf "%d 份 .xls（%s）" queue.Length (RealFolder.limitLabel ()))
             Report.line output "备份目录" backup
@@ -734,7 +799,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
             let run =
                 try
                     Ok(
-                        Sta.run(fun () ->
+                        STA.run(fun () ->
                             let quiet = Attached.quieten app
                             let appliedAlerts = (try app.DisplayAlerts with _ -> true)
                             let appliedSecurity = (try int app.AutomationSecurity with _ -> -1)
@@ -1009,12 +1074,12 @@ type AttachedConvertTest(output: ITestOutputHelper) =
         let info = Attached.wordInfo () |> Report.ok
         let before = Report.procIds "WINWORD"
 
-        Report.line output "参数表" (info.describe())
+        Report.line output "黑板" (info.describe())
         Report.line output "现场" (sprintf "WINWORD 进程 %A" (Set.toList before))
 
         let app =
             try
-                Ok(WordHost.WordTask.GetApplicationAsync info |> fun t -> t.GetAwaiter().GetResult())
+                Ok(WordHost.WordTask.GetApplicationAsync info.Pid |> fun t -> t.GetAwaiter().GetResult())
             with ex ->
                 Error(Errors.explain ex)
 
@@ -1023,8 +1088,8 @@ type AttachedConvertTest(output: ITestOutputHelper) =
             Report.line output "挂回" ("× " + message)
             failwith message
         | Ok app ->
-            let count = Sta.run(fun () -> Attached.docCount app)
-            let version = Sta.run(fun () -> try app.Version with _ -> "?")
+            let count = STA.run(fun () -> Attached.docCount app)
+            let version = STA.run(fun () -> try app.Version with _ -> "?")
 
             Report.line
                 output
@@ -1060,11 +1125,11 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                 |> Set.ofList
 
             Report.title output "常驻 Word：清空实例里本批已打开的文档（不保存）"
-            Report.line output "参数表" (info.describe())
+            Report.line output "黑板" (info.describe())
             Report.line output "本批候选" (sprintf "%d 份 .doc" candidates.Count)
 
             let app =
-                WordHost.WordTask.GetApplicationAsync info
+                WordHost.WordTask.GetApplicationAsync info.Pid
                 |> fun t -> t.GetAwaiter().GetResult()
 
             let docAt (index: int) =
@@ -1075,7 +1140,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                     null
 
             let closed, countBefore, countAfter =
-                Sta.run(fun () ->
+                STA.run(fun () ->
                     let before = Attached.docCount app
                     let mutable closed = []
 
@@ -1143,7 +1208,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
             Assert.True(File.Exists target, sprintf "新文件不在：%s" target)
 
             let app =
-                WordHost.WordTask.GetApplicationAsync info
+                WordHost.WordTask.GetApplicationAsync info.Pid
                 |> fun t -> t.GetAwaiter().GetResult()
 
             let raw (path: string) =
@@ -1153,8 +1218,8 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                 finally
                     WordHost.DocIO.closeDoc doc
 
-            let beforeRaw = Sta.run(fun () -> raw source)
-            let afterRaw = Sta.run(fun () -> raw target)
+            let beforeRaw = STA.run(fun () -> raw source)
+            let afterRaw = STA.run(fun () -> raw target)
 
             let a = WordHost.DocIO.normalize beforeRaw
             let b = WordHost.DocIO.normalize afterRaw
@@ -1579,7 +1644,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                 else "其它"
 
             Report.title output "常驻 Word：逐份升级 .doc，成功一份送走一份"
-            Report.line output "参数表" (info.describe())
+            Report.line output "黑板" (info.describe())
             Report.line output "本轮" (sprintf "%d 份 .doc（%s）" queue.Length (RealFolder.limitLabel ()))
             Report.line output "备份目录" backup
             Report.line output "进度日志" progressFile
@@ -1597,7 +1662,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
             let beforeProc = Report.procIds "WINWORD"
 
             let app =
-                WordHost.WordTask.GetApplicationAsync info
+                WordHost.WordTask.GetApplicationAsync info.Pid
                 |> fun t -> t.GetAwaiter().GetResult()
 
             Report.line
@@ -1669,7 +1734,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
             let run =
                 try
                     Ok(
-                        Sta.run(fun () ->
+                        STA.run(fun () ->
                             let quiet = Attached.quietWord app
                             let appliedAlerts = (try Some app.DisplayAlerts with _ -> None)
                             let appliedSecurity = (try int app.AutomationSecurity with _ -> -1)
@@ -1977,6 +2042,656 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                     failCount
                     (if stopReason = "" then "" else "；停：" + stopReason))
 
+    /// 用户点名的几份「正文对不上」：不比对，直接存 .docx；存成的把原件送回收站。
+    /// 走一次性通道（自己起一只 Word、干完就退）；本机已有 Word 在跑就拒跑，绝不碰用户那份。
+    [<Fact>]
+    member this.``Word 强存：清单里的 doc 不比对直接存 docx``() =
+        match Environment.GetEnvironmentVariable "XUNITHOST_DOC_FORCE_LIST" with
+        | null
+        | "" -> Assert.Skip "设 XUNITHOST_DOC_FORCE_LIST=<一行一个绝对路径的清单>"
+        | listFile ->
+            Assert.True(File.Exists listFile, sprintf "清单不在：%s" listFile)
+
+            let paths =
+                File.ReadAllLines listFile
+                |> Array.map(fun line -> line.Trim())
+                |> Array.filter(fun line -> line <> "" && not (line.StartsWith "#"))
+                |> Array.toList
+
+            let root = RealFolder.root () |> Option.defaultValue ""
+            let say (text: string) = output.WriteLine("    " + text)
+            let beforeProc = Report.procIds "WINWORD"
+
+            Report.title output "Word 强存：清单里的 .doc 不比对正文，直接存 .docx"
+            Report.line output "清单" (sprintf "%s（%d 条）" (Path.GetFileName listFile) paths.Length)
+            Report.line output "口径" "只认「另存成功 + 能读回来」，字数差写进详情、不拦；存成的原件进回收站"
+
+            let run =
+                WordHost.Host.execQuery(fun app ->
+                    paths
+                    |> List.map(fun path ->
+                        let target, status, detail = WordHost.DocForceDocx.convert app path
+                        { Source = path; Target = target; Status = status; Detail = detail }))
+
+            match run with
+            | Error message ->
+                Report.line output "通道" ("拒跑：" + message)
+                Report.conclusion output ("没跑成：" + message)
+                failwith message
+            | Ok outcomes ->
+                for o in outcomes do
+                    Report.line output (RealFolder.mark o.Status) (sprintf "%s —— %s" (Path.GetFileName o.Source) o.Detail)
+
+                // 存成的把原件送回收站（跟逐份通道一个规矩：只送核对通过的）
+                let okOnes = outcomes |> List.filter Convert.canDelete
+
+                for o in okOnes do
+                    RealFolder.deleteVerified root [o] say |> ignore
+
+                let newFiles = okOnes |> List.filter(fun o -> File.Exists o.Target)
+
+                Report.line
+                    output
+                    "落盘"
+                    (sprintf "%d 份新文件都在（%s）" newFiles.Length (newFiles |> List.map(fun o -> Path.GetFileName o.Target) |> String.concat "、"))
+
+                let afterProc = Report.procIds "WINWORD"
+                Report.line output "现场" (sprintf "WINWORD 进程 干活前 %A / 收尾后 %A" (Set.toList beforeProc) (Set.toList afterProc))
+
+                Should.equal true (Set.isSubset afterProc beforeProc)
+                Should.equal okOnes.Length newFiles.Length
+
+                Report.conclusion output (sprintf "完成：%d 份直接存成 docx（原件已进回收站）" newFiles.Length)
+
+    /// 交给你手工保存：把这一份 .doc 打开在 Word 窗口里 —— 不另存、不关、不替你保存。
+    /// 上一次崩溃留下的 `~$` 锁文件先删掉，不然这一份只能只读打开、你保不住。
+    [<Fact>]
+    member this.``交给你手工保存：把这一份 doc 打开在 Word 窗口里``() =
+        match Environment.GetEnvironmentVariable "XUNITHOST_DOC_HANDOFF" with
+        | null
+        | "" -> Assert.Skip "设 XUNITHOST_DOC_HANDOFF=<要打开的 .doc 绝对路径>"
+        | path ->
+            Assert.True(File.Exists path, sprintf "文件不在：%s" path)
+
+            let beforeProc = Report.procIds "WINWORD"
+            Report.title output "交给你手工保存：打开这一份 .doc，窗口留在前台"
+            Report.line output "文件" (sprintf "%s（%d B）" path (FileInfo path).Length)
+
+            // Word 的锁文件是「~$」+ 去掉前两个字的名字；上次崩掉的进程留下的那个会让这一份只读
+            let lockFile =
+                Path.Combine(Path.GetDirectoryName path, "~$" + Path.GetFileName(path).Substring(2))
+
+            let lockNote =
+                if File.Exists lockFile then
+                    try
+                        File.Delete lockFile
+                        "删掉了上次留下的 " + Path.GetFileName lockFile
+                    with ex ->
+                        "删不掉（" + Errors.explain ex + "），可能要你手工删"
+                else
+                    "没有"
+
+            Report.line output "残留锁文件" lockNote
+
+            let app = WordHost.Host.GetOrCreateApplication ()
+
+            let opened, count, pid =
+                STA.run(fun () ->
+                    (try
+                        app.Visible <- true
+                     with _ ->
+                         ())
+
+                    let opened =
+                        try
+                            // Word 的 Open 参数全是 obj&（按引用传），只能一个个抱 ref；
+                            // 这里**不用** OpenNoRepairDialog：要让 Word 自己的修复/提示框露出来给人点。
+                            let mutable fileName: obj = box path
+                            let mutable confirm: obj = box false
+                            let mutable ro: obj = box false
+                            let mutable addRecent: obj = box false
+                            let mutable missing: obj = Type.Missing
+                            let mutable visible: obj = box true
+
+                            let doc =
+                                app.Documents.Open(
+                                    &fileName,
+                                    &confirm,
+                                    &ro,
+                                    &addRecent,
+                                    &missing,
+                                    &missing,
+                                    &missing,
+                                    &missing,
+                                    &missing,
+                                    &missing,
+                                    &missing,
+                                    &visible
+                                )
+
+                            sprintf "已打开 %s（%d 段）" doc.Name (doc.Paragraphs.Count)
+                        with ex ->
+                            "打开报错：" + Errors.explain ex
+
+                    let count = (try app.Documents.Count with _ -> -1)
+                    let pid = WordHost.Host.pidOf app
+                    opened, count, pid)
+
+            Report.line output "结果" opened
+            Report.line output "实例文档数" (string count)
+
+            match pid with
+            | Some number ->
+                let raised = Attached.bringToFront number
+                Report.line output "进程" (sprintf "pid=%d%s" number (if raised then "，已切到前台" else "，没切动，请点任务栏里的 Word"))
+            | None -> Report.line output "进程" "认不出来（窗口还没就绪），请看任务栏里的 Word"
+
+            let afterProc = Report.procIds "WINWORD"
+            Report.line output "现场" (sprintf "WINWORD 进程 干活前 %A / 收尾后 %A（这只**故意留着**，等你保存）" (Set.toList beforeProc) (Set.toList afterProc))
+
+            Report.conclusion output "完成：文件开在 Word 里，保存由你来（另存为 .docx）；我不关窗口、不退出 Word"
+
+    /// PowerPoint 逐份推进：一份一份送，成功就进下一份；失败打原因、记清单、接着下一份。
+    /// 与 Word / Excel 那两条同构，只换 host：绝不新建 / 不 Quit / 不关用户开着的演示文稿。
+    /// 宏按用户口径**不留**：一律存 .pptx（`XUNITHOST_PPT_KEEP_MACRO=1` 才走 .pptm）。
+    [<Fact>]
+    member this.``常驻 PowerPoint：逐份升级 ppt，成功一份送走一份``() =
+        match RealFolder.root () with
+        | None -> Assert.Skip "设 XUNITHOST_CONVERT_DIR=<目录> 才逐份升级"
+        | Some root ->
+            Assert.True(Directory.Exists root, sprintf "目录不存在：%s" root)
+
+            let info = Attached.pptInfo () |> Report.ok
+            let backup = RealFolder.backupRoot root
+            let all = Paths.selectForRound root Paths.Kind.Ppt (Paths.scan root)
+
+            let queue =
+                match Paths.limitFromEnv () with
+                | Some n -> all |> List.truncate n
+                | None -> all
+
+            let queueSet =
+                queue |> List.map(fun x -> x.Source.ToLowerInvariant()) |> Set.ofList
+
+            /// 正在处理的那一份：通道异常（PowerPoint 崩、文件被占用）时靠它记账
+            let mutable currentItem: Item option = None
+
+            let intEnv (name: string) (fallback: int) =
+                let text = defaultArg (Option.ofObj (Environment.GetEnvironmentVariable name)) ""
+
+                match Int32.TryParse text with
+                | true, n when n > 0 -> n
+                | _ -> fallback
+
+            let hintSec = intEnv "XUNITHOST_CONVERT_POPUP_HINT" (intEnv "XUNITHOST_CONVERT_TIMEOUT" 45)
+            let sameReasonLimit = intEnv "XUNITHOST_CONVERT_SAME_REASON" 3
+            let projectRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."))
+
+            let fileEnv (name: string) (fallback: string) =
+                match Environment.GetEnvironmentVariable name with
+                | null
+                | "" -> Path.Combine(projectRoot, "TestResults", fallback)
+                | value -> value
+
+            let progressFile = fileEnv "XUNITHOST_CONVERT_PROGRESS" "逐份-进度-Ppt.log"
+            let failedFile = fileEnv "XUNITHOST_CONVERT_FAILED" "逐份-失败清单-Ppt.txt"
+            let say (text: string) = output.WriteLine("    " + text)
+
+            // 主线程写、看门狗线程也写，同一个文件要串行
+            let progressGate = obj()
+
+            let append (path: string) (line: string) =
+                lock progressGate (fun () ->
+                    let mutable ok = false
+                    let mutable tries = 0
+
+                    while not ok && tries < 5 do
+                        tries <- tries + 1
+
+                        try
+                            File.AppendAllText(path, line + Environment.NewLine)
+                            ok <- true
+                        with _ ->
+                            System.Threading.Thread.Sleep 50)
+
+            let record (text: string) =
+                let line = sprintf "%s %s" (DateTime.Now.ToString("HH:mm:ss")) text
+                say line
+                append progressFile line
+
+            let failedSeen =
+                if File.Exists failedFile then
+                    File.ReadAllLines failedFile
+                    |> Array.map(fun line -> line.Trim())
+                    |> Array.filter(fun line -> line <> "" && not (line.StartsWith "#"))
+                    |> Set.ofArray
+                else
+                    try
+                        File.WriteAllText(
+                            failedFile,
+                            "# 逐份升级失败清单（每行一个相对路径；可直接给 XUNITHOST_CONVERT_SKIP）" + Environment.NewLine
+                        )
+                    with _ ->
+                        ()
+
+                    Set.empty
+
+            let mutable known = failedSeen
+
+            let noteFailure (rel: string) =
+                if not (known.Contains rel) then
+                    known <- known.Add rel
+
+                    try
+                        File.AppendAllText(failedFile, rel + Environment.NewLine)
+                    with _ ->
+                        ()
+
+            let reasonOf (detail: string) =
+                if detail.Contains "修复" then "修复对话框"
+                elif detail.Contains "对不上" then "内容对不上"
+                elif detail.Contains "超时" then "COM 超时"
+                elif detail.Contains "拒绝" then "COM 拒绝"
+                elif detail.Contains "占用" then "文件被占用"
+                elif detail.Contains "宏" then "宏判定"
+                else "其它"
+
+            Report.title output "常驻 PowerPoint：逐份升级 .ppt，成功一份送走一份"
+            Report.line output "黑板" (info.describe())
+            Report.line output "本轮" (sprintf "%d 份 .ppt（%s）" queue.Length (RealFolder.limitLabel ()))
+            Report.line output "备份目录" backup
+            Report.line output "进度日志" progressFile
+            Report.line output "失败清单" (sprintf "%s（已有 %d 条历史失败）" failedFile failedSeen.Count)
+            Report.line output "宏口径" (sprintf "不留宏，一律存 .pptx（保宏路 %b）" (PowerPointHost.PptUpgrade.keepMacro ()))
+
+            Report.line
+                output
+                "弹窗策略"
+                (sprintf
+                    "不躲：%d 秒没进展就把 PowerPoint 切到前台催人，点掉对话框自动继续；只激活窗口，不杀进程、不关你的演示文稿"
+                    hintSec)
+
+            Report.line output "停的条件" (sprintf "同一原因连续 %d 次（卡住不判失败，等你处理）" sameReasonLimit)
+
+            let beforeProc = Report.procIds "POWERPNT"
+
+            let app = Attached.attachPpt info.Pid |> Report.ok
+
+            Report.line
+                output
+                "挂回"
+                (sprintf
+                    "pid=%d rot=%s（校验只用进程身份）"
+                    info.Pid
+                    (if String.IsNullOrWhiteSpace info.Rot then "按 ProgID" else info.Rot))
+
+            let focusOnStart =
+                match Environment.GetEnvironmentVariable "XUNITHOST_CONVERT_FOCUS" with
+                | null
+                | "" -> true
+                | text -> text.Trim() <> "0"
+
+            let raised = if focusOnStart then Attached.bringToFront info.Pid else false
+
+            Report.line
+                output
+                "界面"
+                (sprintf
+                    "开跑前置 %s：%s"
+                    (if focusOnStart then "开" else "关")
+                    (if not focusOnStart then "没动窗口，只在卡住时催"
+                     elif raised then "已把 PowerPoint 切到前台，跑的时候有对话框你会立刻看见"
+                     else "没切动，请自己点任务栏里的 PowerPoint 看一眼"))
+
+            let mutable currentStage = "未开始"
+            let mutable currentSince = DateTime.Now
+            let mutable watchStop = false
+            let mutable lastHint = DateTime.MinValue
+            let mutable hintCount = 0
+
+            let watchdog =
+                new System.Threading.Timer(
+                    (fun (_: obj) ->
+                        if not watchStop then
+                            let secs = int (DateTime.Now - currentSince).TotalSeconds
+                            let sinceHint = (DateTime.Now - lastHint).TotalSeconds
+
+                            if secs >= hintSec && sinceHint >= float hintSec && hintCount < 40 then
+                                lastHint <- DateTime.Now
+                                hintCount <- hintCount + 1
+                                let front = Attached.bringToFront info.Pid
+
+                                record (
+                                    sprintf
+                                        "⚠ 没进展 %d 秒（%s）—— 多半弹了对话框；%s"
+                                        secs
+                                        currentStage
+                                        (if front then
+                                             "已把 PowerPoint 切到前台，请点掉弹窗，点完我自动继续"
+                                         else
+                                             "没切动前台，请自己点任务栏里的 PowerPoint 看一眼")
+                                )),
+                    null,
+                    5000,
+                    5000
+                )
+
+            let mutable okCount = 0
+            let mutable failCount = 0
+            let mutable stopReason = ""
+            let mutable lastReason = ""
+            let mutable sameRun = 0
+            let outcomes = ResizeArray<Outcome>()
+
+            let run =
+                try
+                    Ok(
+                        STA.run(fun () ->
+                            let quiet = Attached.quietPpt app
+                            let appliedAlerts = (try Some app.DisplayAlerts with _ -> None)
+                            let appliedSecurity = (try int app.AutomationSecurity with _ -> -1)
+                            let presBefore = Attached.presCount app
+
+                            try
+                                record (sprintf "  实例演示文稿 %d 份（用户自己也开着的不关）" presBefore)
+
+                                // 上次中断可能把自己的演示文稿留在实例里：只关本队列里的那些，
+                                // 用户自己开着的别的文件一个字不动。
+                                if presBefore > 0 then
+                                    let mutable closed = []
+
+                                    for k in presBefore .. -1 .. 1 do
+                                        let pres =
+                                            try
+                                                app.Presentations.Item(k)
+                                            with _ ->
+                                                null
+
+                                        let full =
+                                            try
+                                                if isNull pres then "" else pres.FullName
+                                            with _ ->
+                                                ""
+
+                                        if not (isNull pres) && full <> "" && queueSet.Contains(full.ToLowerInvariant()) then
+                                            try
+                                                pres.Close()
+                                                closed <- Path.GetFileName full :: closed
+                                            with _ ->
+                                                ()
+
+                                    if not closed.IsEmpty then
+                                        record (
+                                            sprintf
+                                                "  关掉上次残留 %d 份（%s）"
+                                                closed.Length
+                                                (String.concat "、" (List.rev closed))
+                                        )
+
+                                let mutable index = 0
+
+                                while index < queue.Length && stopReason = "" do
+                                    let i = queue.[index]
+                                    index <- index + 1
+                                    currentItem <- Some i
+                                    let rel = RealFolder.rel root i.Source
+                                    currentStage <- sprintf "[%d/%d] 开始 %s" index queue.Length rel
+                                    currentSince <- DateTime.Now
+                                    lastHint <- DateTime.MinValue
+                                    record (sprintf "[%d/%d] 开始 %s" index queue.Length rel)
+                                    let clock = System.Diagnostics.Stopwatch.StartNew()
+
+                                    let finish (text: string) =
+                                        record text
+                                        record (sprintf "  本份耗时 %.1f 秒" clock.Elapsed.TotalSeconds)
+
+                                    if not (Set.contains info.Pid (Report.procIds info.Image)) then
+                                        stopReason <- sprintf "常驻 PowerPoint pid %d 已不在" info.Pid
+                                        record ("停：" + stopReason)
+                                    else
+                                        // ---- 1. 只备份这一份 ----
+                                        currentStage <- sprintf "[%d/%d] 备份 %s" index queue.Length rel
+                                        currentSince <- DateTime.Now
+
+                                        let backed =
+                                            try
+                                                RealFolder.backupAll root backup [i] say |> ignore
+                                                true
+                                            with ex ->
+                                                record ("  备份失败：" + Errors.explain ex)
+                                                false
+
+                                        if backed then
+                                            // ---- 2. 重名让位 ----
+                                            currentStage <- sprintf "[%d/%d] 重名让位 %s" index queue.Length rel
+
+                                            let _, skipped = RealFolder.renameExisting root [i] say
+
+                                            if skipped.Contains i.Source then
+                                                failCount <- failCount + 1
+                                                finish (sprintf "× %s —— 现有同名新文件改名失败，这份跳过" rel)
+                                                noteFailure rel
+                                            else
+                                                // ---- 3. 转换这一份（内部已读回核对） ----
+                                                currentStage <- sprintf "[%d/%d] 转换 %s" index queue.Length rel
+                                                currentSince <- DateTime.Now
+
+                                                let originalHash =
+                                                    try
+                                                        Some(Attached.md5 i.Source)
+                                                    with _ ->
+                                                        None
+
+                                                let originalLen =
+                                                    try
+                                                        Some((FileInfo i.Source).Length)
+                                                    with _ ->
+                                                        None
+
+                                                let outcome =
+                                                    try
+                                                        Convert.showsAttached app [i] |> List.head
+                                                    with ex ->
+                                                        { Source = i.Source
+                                                          Target = i.Target
+                                                          Status = "失败"
+                                                          Detail = Errors.explain ex }
+
+                                                outcomes.Add outcome
+
+                                                // ---- 4. 原件被改写就从备份还原（失败件必须原样） ----
+                                                let restored =
+                                                    if File.Exists i.Source && originalHash.IsSome then
+                                                        let afterHash = Attached.md5 i.Source
+
+                                                        if afterHash = originalHash.Value then
+                                                            true
+                                                        else
+                                                            try
+                                                                let backupFile = Path.Combine(backup, rel)
+                                                                File.Copy(backupFile, i.Source, true)
+                                                                let nowHash = Attached.md5 i.Source
+                                                                let backupHash = Attached.md5 backupFile
+
+                                                                record (
+                                                                    sprintf
+                                                                        "  原件被 PowerPoint 改写（md5 %s → %s，%d B），已从备份还原成%s"
+                                                                        (originalHash.Value.Substring(0, 8))
+                                                                        (nowHash.Substring(0, 8))
+                                                                        (defaultArg originalLen -1L)
+                                                                        (if nowHash = backupHash then
+                                                                             "原始字节"
+                                                                         else
+                                                                             "⚠ 与备份不一致的字节")
+                                                                )
+
+                                                                nowHash = backupHash
+                                                            with ex ->
+                                                                record ("  × 原件被改写，还原失败：" + Errors.explain ex)
+                                                                false
+                                                    else
+                                                        true
+
+                                                // ---- 5. 通过就一份一送；不通过就打原因、记清单 ----
+                                                currentStage <- sprintf "[%d/%d] 送回收站 %s" index queue.Length rel
+                                                currentSince <- DateTime.Now
+
+                                                if Convert.canDelete outcome then
+                                                    let removed, kept = RealFolder.deleteVerified root [outcome] say
+
+                                                    if removed = 1 then
+                                                        okCount <- okCount + 1
+                                                        sameRun <- 0
+                                                        lastReason <- ""
+                                                        finish (sprintf "✓ %s —— %s" rel outcome.Detail)
+                                                    else
+                                                        failCount <- failCount + 1
+                                                        sameRun <- 0
+                                                        finish (sprintf "× %s —— 新文件在，但原件送不进回收站（留下 %d 份）" rel kept)
+                                                        noteFailure rel
+                                                else
+                                                    failCount <- failCount + 1
+                                                    let reason = reasonOf outcome.Detail
+                                                    finish (sprintf "× %s —— %s（%s）" rel reason outcome.Detail)
+                                                    noteFailure rel
+
+                                                    if reason = lastReason then
+                                                        sameRun <- sameRun + 1
+                                                    else
+                                                        lastReason <- reason
+                                                        sameRun <- 1
+
+                                                    if sameRun >= sameReasonLimit then
+                                                        stopReason <- sprintf "同一原因「%s」连续 %d 次" reason sameRun
+                                                        record ("停：" + stopReason + " —— 像系统性问题，先查这一条")
+
+                                                if not restored then
+                                                    record "  ⚠ 上面那份原件没还原成功，先核对备份"
+                                        else
+                                            failCount <- failCount + 1
+                                            finish (sprintf "× %s —— 备份失败，原件保留、这份跳过" rel)
+                            finally
+                                Attached.restorePpt app quiet
+
+                            (quiet.Alerts,
+                             appliedAlerts,
+                             quiet.Security |> Option.map int,
+                             appliedSecurity,
+                             (try Some app.DisplayAlerts with _ -> None),
+                             (try int app.AutomationSecurity with _ -> -1),
+                             presBefore,
+                             Attached.presCount app,
+                             Attached.ownPresLeft app queueSet))
+                    )
+                with ex ->
+                    let detail = Errors.explain ex
+                    record ("× 通道异常：" + detail)
+
+                    // 通道异常也要记账：不然报告里是「失败 0 份」、清单里也没这条，下一轮又撞同一个坑
+                    match currentItem with
+                    | Some i ->
+                        let rel = RealFolder.rel root i.Source
+                        failCount <- failCount + 1
+                        record (sprintf "× %s —— 通道异常（%s），记入失败清单" rel detail)
+                        noteFailure rel
+
+                        let backupFile = Path.Combine(backup, rel)
+
+                        if File.Exists i.Source && File.Exists backupFile then
+                            try
+                                let nowHash = Attached.md5 i.Source
+                                let backupHash = Attached.md5 backupFile
+
+                                if nowHash <> backupHash then
+                                    File.Copy(backupFile, i.Source, true)
+
+                                    record (
+                                        sprintf
+                                            "  原件被改写（md5 %s → %s），已从备份还原"
+                                            (backupHash.Substring(0, 8))
+                                            (nowHash.Substring(0, 8))
+                                    )
+                            with restoreEx ->
+                                record ("  ⚠ 还原失败：" + Errors.explain restoreEx)
+                    | None -> ()
+
+                    Error detail
+
+            watchStop <- true
+            watchdog.Dispose()
+
+            match run with
+            | Ok(quietAlerts,
+                  appliedAlerts,
+                  quietSecurity,
+                  appliedSecurity,
+                  restoredAlerts,
+                  restoredSecurity,
+                  presBefore,
+                  presAfter,
+                  ownLeft) ->
+                Report.line output "DisplayAlerts" (sprintf "原值 %A → %A → 恢复 %A" quietAlerts appliedAlerts restoredAlerts)
+
+                Report.line
+                    output
+                    "AutomationSecurity"
+                    (sprintf "原值 %A → %d（ForceDisable）→ 恢复 %d" quietSecurity appliedSecurity restoredSecurity)
+
+                Report.line
+                    output
+                    "实例演示文稿"
+                    (sprintf "干活前 %d 份 / 收尾后 %d 份（用户自己也开着的只算数、不判定）" presBefore presAfter)
+
+                Report.line output "我开的还剩" (sprintf "%d 份（0 = 自己开的都关了；-1 = 数不出来）" ownLeft)
+
+                Should.equal 3 appliedSecurity
+
+                (match quietAlerts with
+                 | Some value -> Should.equal (Some value) restoredAlerts
+                 | None -> ())
+
+                (match quietSecurity with
+                 | Some value -> Should.equal (Some value) (Some restoredSecurity)
+                 | None -> ())
+
+                if ownLeft >= 0 then Should.equal 0 ownLeft
+            | Error _ -> ()
+
+            Report.line output "本轮结果" (sprintf "队列 %d 份，成功 %d 份，失败 %d 份" queue.Length okCount failCount)
+
+            Report.line
+                output
+                "催前台"
+                (sprintf "%d 次（%d 秒没进展就催一次；催了还没动，就是在等你在对话框中做选择）" hintCount hintSec)
+
+            if stopReason <> "" then
+                Report.line output "停下原因" stopReason
+
+            // 核对没通过的，原件一份都不能丢
+            for o in outcomes |> Seq.filter(Convert.canDelete >> not) do
+                Assert.True(File.Exists o.Source, sprintf "核对没通过却把原件弄丢了：%s" o.Source)
+
+            let afterProc = Report.procIds "POWERPNT"
+            Report.line output "现场" (sprintf "POWERPNT 进程 干活前 %A / 收尾后 %A" (Set.toList beforeProc) (Set.toList afterProc))
+
+            // 只断言「没有新建」；PowerPoint 自己崩溃重启不是这条通道能拦的，报告出来就够
+            Should.equal true (Set.isSubset afterProc beforeProc)
+
+            if not (Set.contains info.Pid afterProc) then
+                record (sprintf "  ⚠ 常驻 PowerPoint pid=%d 已不在：多半是打开坏文件时它自己重启了，本轮到此为止" info.Pid)
+
+            let left = Paths.scan root |> Paths.filterByKind Paths.Kind.Ppt
+            Report.line output "目录现状" (sprintf "还剩 %d 份 .ppt（本轮成功 %d 份已送回收站）" left.Length okCount)
+
+            Report.conclusion
+                output
+                (sprintf
+                    "逐份推进：队列 %d 份，成功 %d 份（原件已入回收站），失败 %d 份（原件保留，相对路径记入失败清单）%s"
+                    queue.Length
+                    okCount
+                    failCount
+                    (if stopReason = "" then "" else "；停：" + stopReason))
+
     /// 单份分阶段计时：打开 / 判宏 / UsedRange / 读指纹 / SaveAs / 读回，哪一步慢一目了然。
     /// 只诊断一份、SaveAs 到 %TEMP%，不动原目录；结束后把原件从备份还原。
     /// 每步行进都实时写 TestResults/诊断-分阶段.log，真卡住也能看到最后一步。
@@ -2046,7 +2761,7 @@ type AttachedConvertTest(output: ITestOutputHelper) =
 
             let run =
                 try
-                    Sta.run(fun () ->
+                    STA.run(fun () ->
                         let quiet = Attached.quieten app
 
                         try
@@ -2109,3 +2824,367 @@ type AttachedConvertTest(output: ITestOutputHelper) =
                 Report.line output "原件还原" "原件字节没变，不用还原"
 
             Report.conclusion output "完成：上面每一步的秒数就是真实耗时，最慢那一步就是卡点"
+
+    /// 按章节切分：目录（TOC）给标题清单，正文里逐条定位标题，切点取标题起点。
+    /// 每份的做法：SaveCopyAs 出一份完整 docx 副本 → 打开副本 → 删掉本章之外的部分 → 存 → 关。
+    /// 这样页面设置、页眉页脚、样式、编号都原样保留，源文档一个字节都不改，Word 里同时只留一个文档。
+    /// 闸门：XUNITHOST_DOC_SPLIT_OUT=<输出目录>；XUNITHOST_DOC_SPLIT_SRC=<源 doc 路径>（不给就用活动文档）；
+    /// XUNITHOST_DOC_SPLIT_DRY=1 只列结构；已存在的同名 docx 直接跳过（可重跑）。
+    [<Fact>]
+    member this.``按章节切分：把开着的这份 doc 逐章存成 docx``() =
+        match Environment.GetEnvironmentVariable "XUNITHOST_DOC_SPLIT_OUT" with
+        | null
+        | "" -> Assert.Skip "设 XUNITHOST_DOC_SPLIT_OUT=<输出目录>"
+        | outDir ->
+            let dry = Environment.GetEnvironmentVariable "XUNITHOST_DOC_SPLIT_DRY" = "1"
+
+            let srcPath = Environment.GetEnvironmentVariable "XUNITHOST_DOC_SPLIT_SRC"
+
+            let clean (text: string) =
+                text.Replace("\r", "").Replace("\n", "").Replace("\u0007", "").Trim()
+
+            let safeName (text: string) =
+                let bad = Path.GetInvalidFileNameChars()
+                let buffer = System.Text.StringBuilder()
+
+                for ch in text do
+                    if Array.contains ch bad then
+                        buffer.Append '_' |> ignore
+                    else
+                        buffer.Append ch |> ignore
+
+                let name = buffer.ToString().Trim().TrimEnd('.')
+                if name.Length > 60 then name.Substring(0, 60) else name
+
+            // 目录条目形如「16.  脱硫岛电气系统技术描述」，去掉点线引导符和末尾页码做文件名
+            let tidy (text: string) =
+                let noDots =
+                    System.Text.RegularExpressions.Regex.Replace(text, @"[\.\u2026\u00b7\u3000\s]+", " ")
+
+                System.Text.RegularExpressions.Regex.Replace(noDots, @"\s*\d+\s*$", "").Trim()
+
+            Report.title output "按章节切分：目录定位标题，逐章存 docx（源文档不改、不保存）"
+
+            let app = WordHost.Host.GetOrCreateApplication ()
+
+            let srcName, total, endOfDoc, sectionCount, tocItems, chapters, saved =
+                STA.run(fun () ->
+                    // Word 稍微一忙就甩 RPC_E_CALL_REJECTED，所有调用一律过一遍忙重试
+                    let busy (f: unit -> 'T) = Busy.retry 120000 f
+
+                    let alerts = busy (fun () -> app.DisplayAlerts)
+                    busy (fun () -> app.DisplayAlerts <- Microsoft.Office.Interop.Word.WdAlertLevel.wdAlertsNone)
+                    // 露出来：万一弹了什么，用户能看见、能点，不至于在看不见的实例里卡死
+                    busy (fun () -> app.Visible <- true)
+
+                    try
+                        let source =
+                            if not (String.IsNullOrWhiteSpace srcPath) then
+                                // 先清掉上次留下的 ~$ 锁，免得被只读打开
+                                try
+                                    for lock in Directory.GetFiles(Path.GetDirectoryName srcPath, "~$*") do
+                                        try
+                                            File.Delete lock
+                                        with _ ->
+                                            ()
+                                with _ ->
+                                    ()
+
+                                // 已经开着的就是这一份就别重复打开（重复 Open 同一路径会把 Word 拖进怪状态）
+                                let alreadyOpen =
+                                    try
+                                        let active = app.ActiveDocument
+
+                                        if not (isNull active) && active.FullName = srcPath then
+                                            Some active
+                                        else
+                                            None
+                                    with _ ->
+                                        None
+
+                                match alreadyOpen with
+                                | Some active -> active
+                                | None ->
+                                    busy (fun () ->
+                                        let mutable fileName: obj = box srcPath
+                                        let mutable confirm: obj = box false
+                                        let mutable readOnly: obj = box false
+                                        let mutable recent: obj = box false
+                                        let mutable missing: obj = Type.Missing
+                                        // 12=Visible、13=OpenAndRepair 必须给：老 doc 一打开就弹「是否修复」，
+                                        // 弹在看不见的隐藏实例里就只能等，整条通道会卡死。
+                                        let mutable visible: obj = box true
+                                        let mutable repair: obj = box true
+
+                                        app.Documents.Open(
+                                            &fileName,
+                                            &confirm,
+                                            &readOnly,
+                                            &recent,
+                                            &missing,
+                                            &missing,
+                                            &missing,
+                                            &missing,
+                                            &missing,
+                                            &missing,
+                                            &missing,
+                                            &visible,
+                                            &repair
+                                        ))
+                            else
+                                app.ActiveDocument
+
+                        let srcName = busy (fun () -> source.Name)
+                        let total = busy (fun () -> source.Paragraphs.Count)
+                        let endOfDoc = busy (fun () -> source.Content.End)
+                        let sectionCount = busy (fun () -> source.Sections.Count)
+
+                        let tocItems =
+                            if busy (fun () -> source.TablesOfContents.Count) = 0 then
+                                [||]
+                            else
+                                (busy (fun () -> source.TablesOfContents.Item(1).Range.Text)).Split('\r')
+                                |> Array.map clean
+                                |> Array.filter (fun line -> line.Length > 0)
+
+                        let tocEnd =
+                            if busy (fun () -> source.TablesOfContents.Count) = 0 then
+                                0
+                            else
+                                busy (fun () -> source.TablesOfContents.Item(1).Range.End)
+
+                        // 在文中（或副本里）从 from 往后找一段文字，命中返回起点，找不到返回 -1
+                        let findIn (target: Microsoft.Office.Interop.Word.Document) (text: string) (from: int) =
+                            if isNull target || text.Trim().Length < 2 then
+                                -1
+                            else
+                                let mutable f: obj = box from
+                                let mutable t: obj = box (busy (fun () -> target.Content.End))
+                                let range = target.Range(&f, &t)
+
+                                busy (fun () ->
+                                    range.Find.ClearFormatting()
+                                    range.Find.Text <- text.Trim()
+                                    range.Find.Forward <- true
+                                    range.Find.Wrap <- Microsoft.Office.Interop.Word.WdFindWrap.wdFindStop)
+
+                                if busy (fun () -> range.Find.Execute()) then
+                                    range.Start
+                                else
+                                    -1
+
+                        // 逐条目录文本定位；顺带回溯 200 字符看标题前面有没有分节符 / 分页符（只作报告）
+                        let chapters =
+                            tocItems
+                            |> Array.map (fun item ->
+                                let pos = findIn source item tocEnd
+
+                                let mark =
+                                    if pos < 0 then
+                                        "没找到"
+                                    elif pos <= 1 then
+                                        "文件开头"
+                                    else
+                                        let mutable a: obj = box (max 0 (pos - 200))
+                                        let mutable b: obj = box pos
+                                        let rng = source.Range(&a, &b)
+
+                                        if (busy (fun () -> rng.Text)).Contains "\u000c" then
+                                            "标题前有分节符/分页符"
+                                        else
+                                            "标题前无分节符"
+
+                                tidy item, pos, mark)
+
+                        let results = ResizeArray<string * string>()
+
+                        if not dry then
+                            Directory.CreateDirectory outDir |> ignore
+
+                            let located =
+                                chapters
+                                |> Array.filter (fun (_, pos, _) -> pos > 0)
+                                |> Array.sortBy (fun (_, pos, _) -> pos)
+
+                            // 计划：封面目录 + 每章（名字、本章标题原文、下一章标题原文）
+                            let plan = ResizeArray<string * string * string>()
+
+                            if located.Length > 0 then
+                                let rawOf title =
+                                    tocItems
+                                    |> Array.tryFind (fun item -> tidy item = title)
+                                    |> Option.defaultValue title
+
+                                plan.Add("00 封面与目录", "", rawOf (let (t, _, _) = located.[0] in t))
+
+                                for i in 0 .. located.Length - 1 do
+                                    let (title, _, _) = located.[i]
+
+                                    let nextTitle =
+                                        if i + 1 < located.Length then
+                                            let (t2, _, _) = located.[i + 1]
+                                            rawOf t2
+                                        else
+                                            ""
+
+                                    plan.Add(title, rawOf title, nextTitle)
+
+                            // 计划：封面目录 + 每章，直接在源文档里算好 Range 起止
+                            let plan = ResizeArray<string * int * int>()
+
+                            if located.Length > 0 then
+                                let firstPos = let (_, p, _) = located.[0] in p
+
+                                if firstPos > 1 then
+                                    plan.Add("00 封面与目录", 0, firstPos - 1)
+
+                                for i in 0 .. located.Length - 1 do
+                                    let (title, startPos, _) = located.[i]
+
+                                    let stopPos =
+                                        if i + 1 < located.Length then
+                                            let (_, nextPos, _) = located.[i + 1]
+                                            nextPos - 1
+                                        else
+                                            endOfDoc - 1
+
+                                    if stopPos > startPos then
+                                        plan.Add(clean title, startPos, stopPos)
+
+                            let limit =
+                                match Int32.TryParse(Environment.GetEnvironmentVariable "XUNITHOST_DOC_SPLIT_LIMIT") with
+                                | true, value when value > 0 -> value
+                                | _ -> plan.Count
+
+                            // 从第几份开始（1 起）：Word 一个会话做十来份就不稳，分批推进
+                            let fromIndex =
+                                match Int32.TryParse(Environment.GetEnvironmentVariable "XUNITHOST_DOC_SPLIT_FROM") with
+                                | true, value when value > 0 -> min (value - 1) (plan.Count - 1)
+                                | _ -> 0
+
+                            let take = min limit (plan.Count - fromIndex)
+
+                            if fromIndex > 0 || take < plan.Count - fromIndex then
+                                Report.line
+                                    output
+                                    "本批"
+                                    (sprintf "第 %d—%d 份（共 %d 份）" (fromIndex + 1) (fromIndex + take) plan.Count)
+
+                            // 写入方式：fmt=整段 FormattedText（默认）；clip=剪贴板 Copy/Paste；text=只搬文字
+                            // 有的章（12主要性能关系曲线）字符没多少，但整段 FormattedText 一贴就把 Word 弄死，
+                            // 换剪贴板那条路试试
+                            let method =
+                                match Environment.GetEnvironmentVariable "XUNITHOST_DOC_SPLIT_METHOD" with
+                                | null
+                                | "" -> "fmt"
+                                | value -> value.Trim().ToLowerInvariant()
+
+                            for k in 0 .. take - 1 do
+                                let i = fromIndex + k
+                                let name, startPos, stopPos = plan.[i]
+                                let fileName = sprintf "%02d %s.docx" (i + 1) (safeName name)
+                                let finalPath = Path.Combine(outDir, fileName)
+
+                                if File.Exists finalPath then
+                                    results.Add(fileName, "已存在，跳过")
+                                else
+                                    let mutable target: Microsoft.Office.Interop.Word.Document = null
+
+                                    // 用完立刻关、立刻放，别让几十个文档对象堆在 Word 里（上次就是这么崩的）
+                                    let cleanup () =
+                                        if not (isNull target) then
+                                            let dying = target
+                                            target <- null
+
+                                            try
+                                                busy (fun () ->
+                                                    let mutable ns: obj =
+                                                        box (int Microsoft.Office.Interop.Word.WdSaveOptions.wdDoNotSaveChanges)
+
+                                                    dying.Close(&ns))
+                                            with _ ->
+                                                ()
+
+                                            try
+                                                System.Runtime.InteropServices.Marshal.ReleaseComObject dying
+                                                |> ignore
+                                            with _ ->
+                                                ()
+
+                                    try
+                                        let mutable a: obj = box startPos
+                                        let mutable b: obj = box stopPos
+                                        let part = busy (fun () -> source.Range(&a, &b))
+
+                                        target <- busy (fun () -> app.Documents.Add())
+
+                                        let fresh = target
+
+                                        if method = "clip" then
+                                            // 走剪贴板：Word 自己序列化，比跨文档搬 FormattedText 温和
+                                            busy (fun () -> part.Copy())
+                                            busy (fun () -> fresh.Content.Paste())
+                                        elif method = "text" then
+                                            // 兜底：只要文字，图/表对象一律不要
+                                            let text = busy (fun () -> part.Text)
+                                            busy (fun () -> fresh.Content.Text <- text)
+                                        else
+                                            let copied = part.FormattedText
+                                            busy (fun () -> fresh.Content.FormattedText <- copied)
+
+                                        busy (fun () ->
+                                            let mutable pathObj: obj = box finalPath
+
+                                            let mutable fmtObj: obj =
+                                                box (int Microsoft.Office.Interop.Word.WdSaveFormat.wdFormatXMLDocument)
+
+                                            fresh.SaveAs2(&pathObj, &fmtObj) |> ignore)
+
+                                        results.Add(fileName, sprintf "%d B（%s）" (FileInfo finalPath).Length method)
+                                        cleanup ()
+                                    with ex ->
+                                        let where =
+                                            let lines =
+                                                if isNull ex.StackTrace then
+                                                    [||]
+                                                else
+                                                    ex.StackTrace.Split('\n')
+
+                                            if lines.Length > 0 then
+                                                lines
+                                                |> Array.truncate 3
+                                                |> Array.map (fun s -> s.Trim())
+                                                |> String.concat " ｜ "
+                                            else
+                                                ""
+
+                                        results.Add(fileName, "失败：" + Errors.explain ex + " ｜ " + where)
+                                        cleanup ()
+
+                        srcName, total, endOfDoc, sectionCount, tocItems, chapters, results.ToArray()
+                    finally
+                        // Word 已经崩了的话这里也会抛，别让它把真正的异常盖掉
+                        try
+                            app.DisplayAlerts <- alerts
+                        with _ ->
+                            ())
+
+            let atSection = chapters |> Array.filter (fun (_, _, mark) -> mark.Contains "有分节符") |> Array.length
+            let locatedCount = chapters |> Array.filter (fun (_, pos, _) -> pos > 0) |> Array.length
+
+            Report.line output "源文档" (sprintf "%s（%d 段，%d 字符）" srcName total endOfDoc)
+            Report.line output "目录条目" (sprintf "%d 条，正文里定位到 %d 条" tocItems.Length locatedCount)
+            Report.line output "分节符" (sprintf "%d 个（%d 个节）；标题前 200 字符内有分节符/分页符的 %d 条" (sectionCount - 1) sectionCount atSection)
+            Report.line output "切点" "取标题本身的起点（分节符不够用，见上）"
+
+            for index in 0 .. chapters.Length - 1 do
+                let (title, pos, mark) = chapters.[index]
+                Report.line2 output "章" (sprintf "%02d" (index + 1)) (sprintf "起%7d  %-14s %s" pos mark title)
+
+            if dry then
+                Report.conclusion output "完成：只列结构，没落盘（XUNITHOST_DOC_SPLIT_DRY=1）"
+            else
+                for name, note in saved do
+                    Report.line output ("✓ " + name) note
+
+                Report.conclusion output (sprintf "完成：切出 %d 份 docx 到 %s（源文档没保存、没改）" saved.Length outDir)

@@ -31,7 +31,12 @@ module Host =
     let TryGetRunningApplication () : Application option =
         Com.running progIds |> Option.map(fun value -> value :?> Application)
 
-    // ---------------- 黑板模式：按 info 挂回现成的那一只 ----------------
+    // ---------------- 按进程号挂回（判定链） ----------------
+    // 与 ExcelHost / AutoCADHost / WordHost 同一口径：
+    //   · 只认现成对象 —— 绝不 CoCreateInstance、绝不 GetOrCreateApplication、绝不 Quit、不改应用状态；
+    //   · 认人靠 `Application.HWND` → PID 硬核对，另认 ROT 名的 pid 后缀（!PowerPointVSTO.Instance.<pid>）；
+    //   · PID 闸门是**同步**做的：不合格立刻交回已完成且 faulted 的 Task。
+    // 成品入口是 Host.GetApplication（同步 Result）。
 
     /// 这只 PowerPoint 的进程号（Application.HWND 是主窗口句柄）
     let pidOf (app: Application) : int option =
@@ -40,26 +45,67 @@ module Host =
         with _ ->
             None
 
-    /// 这家 host 的进程名：填 GeneralAppInfo 的 Image 就用它（Proc.ids 的口径，不带 .exe）。
+    /// 这家 host 的进程名：Proc.ids 的口径，不带 .exe
     let SelfImage : string = "POWERPNT"
 
-    /// 按插件抄下来的 GeneralAppInfo 精确挂回那一只 PowerPoint 实例。
-    /// 只附着、不新建、不 Quit、不改应用状态 —— 黑板的生命周期不归这儿管。
-    /// 返回的 Application 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
-    /// 信息过时 / ROT 里没有这个名字 / 认错进程，一律 Error。
-    /// 文档级交接检查（换了演示文稿 / 采集后存过盘等）按用户要求推迟，暂不做；
-    /// 演示文稿名 / 路径本来就不在 info 里（GeneralDocInfo 单列），认人只看进程身份。
-    let GetApplication (info: GeneralAppInfo) : Result<Application, string> =
-        GeneralAppInfo.attach info progIds (fun raw ->
-            try
-                let app = raw :?> Application
+    /// obj → Application，并用 HWND → PID 硬核对。不是 PowerPoint / pid 对不上一律 None。
+    let private matchApp (pid: int) (raw: obj) : Application option =
+        try
+            let app = raw :?> Application
 
-                match pidOf app with
-                | Some number when number <> info.Pid ->
-                    Error(sprintf "获取到的 PID %d 与给定的 PID %d 不符" number info.Pid)
-                | _ -> Ok app
-            with ex ->
-                Error(Errors.explain ex))
+            if obj.ReferenceEquals(app, null) then
+                None
+            elif pidOf app = Some pid then
+                Some app
+            else
+                None
+        with _ ->
+            None
+
+    /// 只认现成对象：ProgID 直取没对上就扫一遍 ROT，都没有就是 Error。**绝不新建**。
+    /// 必须在 Sta.run 那条固定 STA 线程上调用（GetApplication 已包好）。
+    let private findOnSta (pid: int) : Result<Application, string> =
+        match Com.running progIds |> Option.bind(matchApp pid) with
+        | Some app -> Ok app
+        | None ->
+            let entries = Com.runningEntries ()
+
+            let hit =
+                entries
+                |> List.tryPick(fun (name, raw) ->
+                    match PowerPointHost.Rot.pidOf name with
+                    | Some number when number = pid ->
+                        (try
+                            Some(raw :?> Application)
+                         with _ ->
+                            None)
+                    | _ -> matchApp pid raw)
+
+            match hit with
+            | Some app -> Ok app
+            | None ->
+                Error(
+                    sprintf
+                        "ROT 里没有 PID %d 的 PowerPoint 自动化对象（ProgID 直取没对上，另扫了 %d 条登记项）：可能正在启动 / 未登记；绝不新建"
+                        pid
+                        entries.Length
+                )
+
+    /// 前置闸门：PID 有效，且确实是正在运行的 POWERPNT 进程。纯查进程表，不碰 COM。
+    let checkPid (pid: int) : Result<unit, string> =
+        if pid <= 0 then
+            Error "PID 必须大于 0：不猜、不新建"
+        elif not (Process.ids SelfImage |> Set.contains pid) then
+            Error(sprintf "PID %d 不是正在运行的 %s 进程：拒绝挂回，绝不新建" pid SelfImage)
+        else
+            Ok()
+
+    /// 挂回活着的 PowerPoint，只附着、不新建、不 Quit、不改应用状态。
+    /// 返回的 Application 请在 OsHost.Sta.run 那条固定 STA 线程上用（与附着同公寓）。
+    let GetApplication (pid: int) : Result<Application, string> =
+        match checkPid pid with
+        | Error message -> Error message
+        | Ok() -> STA.run(fun () -> findOnSta pid)
 
     // ---------------- 收尾 ----------------
 
@@ -156,11 +202,11 @@ module Host =
 
     /// 起一个新的 PowerPoint → 跑 work → 关掉退出。已有实例在跑就返回 Error（绝不碰用户的实例）。
     let private runOnce (work: Application -> 'T) : Result<'T, string> =
-        Sta.here (fun () ->
+        STA.here (fun () ->
             match Com.running progIds with
             | Some _ -> Error "本机已有 PowerPoint 在运行：一次性命令要求它先退干净，否则会碰你手上的演示文稿"
             | None ->
-                let before = Proc.ids "POWERPNT"
+                let before = Process.ids "POWERPNT"
 
                 match
                     (try
@@ -170,7 +216,7 @@ module Host =
                 with
                 | Error message -> Error message
                 | Ok app ->
-                    let pids = Set.difference (Proc.ids "POWERPNT") before
+                    let pids = Set.difference (Process.ids "POWERPNT") before
                     let previousSecurity = quieten app
 
                     let outcome =
@@ -188,7 +234,7 @@ module Host =
                          ())
 
                     release app
-                    Proc.kill (Proc.waitGone "POWERPNT" pids 10000)
+                    Process.kill (Process.waitGone "POWERPNT" pids 10000)
                     outcome)
 
     /// 一次性执行，只关心成败（异常原因以 Error 返回，不向上抛）。

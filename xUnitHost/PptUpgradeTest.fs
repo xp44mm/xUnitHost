@@ -13,18 +13,18 @@ open OsHost
 type PptUpgradeTest(output: ITestOutputHelper) =
 
     [<Fact>]
-    member this.``pptUpgrade 规格：没宏进 pptx、有宏进 pptm，格式码各归其主``() =
+    member this.``pptUpgrade 规格：默认一律存 pptx，格式码与后缀各归其主``() =
         // 纯逻辑，不碰 PowerPoint：验证两条转换各自的规格与统一入口的选路
         let dir = Path.Combine(Path.GetTempPath(), "pptconvert-spec")
         let ppt = Path.Combine(dir, "样例.ppt")
         let pptx = PowerPointHost.PptToPptx.targetOf ppt
         let pptm = PowerPointHost.PptToPptm.targetOf ppt
 
-        Report.title output "pptUpgrade 规格：.ppt 没宏 → .pptx、有宏 → .pptm"
+        Report.title output "pptUpgrade 规格：默认一律 .pptx（宏不留）；XUNITHOST_PPT_KEEP_MACRO=1 才按宏分到 .pptm"
 
         Report.line output ".ppt 无宏 → pptx" (sprintf "%s　格式码 %d　PowerPointHost/PptToPptx" (Path.GetFileName pptx) (int PowerPointHost.PptToPptx.format))
         Report.line output ".ppt 有宏 → pptm" (sprintf "%s　格式码 %d　PowerPointHost/PptToPptm" (Path.GetFileName pptm) (int PowerPointHost.PptToPptm.format))
-        Report.line output "统一入口" "pptUpgrade：判宏 → 纯规则 route 选路 → 调对应转换；判不出宏就失败、原件保留"
+        Report.line output "统一入口" "pptUpgrade：默认直走 PptToPptx（宏只记录、不拦路）；只有 XUNITHOST_PPT_KEEP_MACRO=1 才判宏 → route 选路"
 
         Should.equal (Path.ChangeExtension(ppt, ".pptx")) pptx
         Should.equal (Path.ChangeExtension(ppt, ".pptm")) pptm
@@ -93,7 +93,7 @@ type PptUpgradeTest(output: ITestOutputHelper) =
                     else
                         ""
 
-                // ---- 负例：打不开的 .ppt 判不出有没有宏，必须失败、原件保留，绝不猜「没宏」----
+                // ---- 负例：打不开的 .ppt（文件不存在）必须失败、原件保留 ----
                 let missing = PowerPointHost.PptUpgrade.pptUpgrade app (Path.Combine(dir, "不存在.ppt"))
 
                 ( before
@@ -116,7 +116,7 @@ type PptUpgradeTest(output: ITestOutputHelper) =
             Report.line output "核对" (sprintf "幻灯片文字指纹 %d 字符，与原件逐字相同" after.Length)
             Report.line output "再来一次" (sprintf "%s（已有同名新文件，先转临时文件比完就删，不覆盖）" againStatus)
             Report.line output "保宏路" (sprintf "%s → %s　%s" (Path.GetFileName ppt) (Path.GetFileName macroTarget) macroDetail)
-            Report.line output "判不出宏" (sprintf "%s —— %s" missingStatus missingDetail)
+            Report.line output "打不开的" (sprintf "%s —— %s" missingStatus missingDetail)
 
             Should.equal "转了" status
             Assert.True(pptxExists, "没生成 pptx")
@@ -128,13 +128,13 @@ type PptUpgradeTest(output: ITestOutputHelper) =
             Assert.True(pptmExists, "没生成 pptm")
             Should.equal before macroPrint
             Should.equal "失败" missingStatus
-            Assert.Contains("判不出有没有 VBA 宏", missingDetail)
+            Assert.True(missingDetail.Length > 0, "失败要给出原因")
 
-            Report.conclusion output "通过：pptUpgrade 判宏选路、转完读回比对、已有同名不覆盖、判不出宏原件保留"
+            Report.conclusion output "通过：pptUpgrade 默认存 .pptx、转完读回比对、已有同名不覆盖、打不开就失败原件保留"
         finally
             // 兜底只清自己起的进程；用户手上的一只都不碰
             let leftovers = Set.difference (Report.procIds "POWERPNT") beforeProc
-            if not leftovers.IsEmpty then Proc.kill leftovers
+            if not leftovers.IsEmpty then Process.kill leftovers
 
             (try
                 Directory.Delete(dir, true)

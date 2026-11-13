@@ -1,4 +1,4 @@
-/// 「第二个进程」本人：跨进程那条 Fact 需要一个**真的另一个进程**，
+﻿/// 「第二个进程」本人：跨进程那条 Fact 需要一个**真的另一个进程**，
 /// 但不必为它再编一个程序 —— 拿这个测试程序自己再起一份、只跑这一条 Fact 就够了。
 ///
 /// 它平时一直跳过（没有地址就不开口），只有父进程把地址递过来才动：
@@ -54,7 +54,6 @@ type SecondProcessTest(output: ITestOutputHelper) =
                             let cell = sheet.Range "A1"
                             cell.Value2 <- (string cell.Value2).Trim() + sentence
                             (string cell.Value2).Trim())
-                    | Kind.AutoCAD -> Error "AutoCAD 这一步没做（冷启动太慢）"
 
                 match said with
                 | Error message -> failwithf "说不上话：%s" message

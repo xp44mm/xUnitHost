@@ -134,6 +134,65 @@ module DocToDocm =
 
         outcome
 
+/// **强行存档**：不比对正文，直接存 .docx（格式码 12）。
+/// 为什么单列：Word 读不出的东西（旧结构的域结果、嵌套表、被 Word 丢掉的隐藏文字）会让新文件
+/// 比原件少一截字数，按 `DocToDocx` 的口径一律判「正文对不上、原件保留」。
+/// 2026-11-11 用户对点名的那几份定：「不管对上对不上，直接保存 docx」。
+/// 所以这里只认「另存成功、目标文件确实在、还能读回来」，字数差只写进详情备查，不拦。
+module DocForceDocx =
+
+    /// wdFormatXMLDocument（无宏）
+    let format: obj = box 12
+
+    /// 这条转换认领的后缀
+    let targetOf (source: string) = Path.ChangeExtension(source, ".docx")
+
+    /// 返回 (真正落盘的目标, 状态, 详情)
+    let convert (app: Application) (source: string) : string * string * string =
+        let target = targetOf source
+        let mutable doc: Document = null
+        let mutable back: Document = null
+        let mutable exists = false
+        let mutable stage = target
+
+        let body () =
+            doc <- DocIO.openDoc app source false
+            let before = (DocIO.bodyText doc).Length
+
+            exists <- File.Exists target
+            stage <- DocIO.stageFor exists target
+
+            DocIO.saveDocAs format doc stage
+            DocIO.closeDoc doc
+            doc <- null
+
+            // 读回来这一下同时证明「文件真在、还打得开」
+            back <- DocIO.openDoc app stage true
+            let after = (DocIO.bodyText back).Length
+            DocIO.closeDoc back
+            back <- null
+
+            let note =
+                sprintf "按「不比对」直接存：原件 %d 字 / 新文件 %d 字（差 %d）" before after (before - after)
+
+            if exists then
+                (target, "已有·一致", "现有 docx 在；" + note)
+            else
+                (target, "转了", note)
+
+        let outcome =
+            try
+                body ()
+            with ex ->
+                (target, "失败", OsHost.Errors.explain ex)
+
+        if not (isNull doc) then DocIO.closeDoc doc
+        if not (isNull back) then DocIO.closeDoc back
+
+        DocIO.cleanupStage exists stage
+
+        outcome
+
 /// 统一入口：把一份 .doc 升级成新格式。
 /// **2026-11-11 用户定：Word 的宏一律不保留，统一存 .docx**（`wdFormatXMLDocument`）。
 /// 原来按 `HasVBProject` 分派「有宏走 .docm 保宏」，实测行不通：老 .doc 的工程多半是空壳或被

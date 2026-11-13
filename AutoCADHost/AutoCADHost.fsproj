@@ -1,52 +1,41 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <!--
-    AutoCAD 主机（netstandard2.0）：只提供一个 GetOrCreateApplication()。
-    有实例取实例，没有就创建一个；不退出，生命周期归调用方。
-    互操作程序集取自本机 AutoCAD 2020 安装目录（R23.1），随本库一起输出。
-  -->
-  <PropertyGroup>
-    <OutputType>Library</OutputType>
-    <TargetFramework>netstandard2.0</TargetFramework>
-    <AssemblyName>AutoCADHost</AssemblyName>
-    <RootNamespace>AutoCADHost</RootNamespace>
-    <LangVersion>latest</LangVersion>
-    <PlatformTarget>x64</PlatformTarget>
-    <NuGetAudit>false</NuGetAudit>
-  </PropertyGroup>
+    <PropertyGroup>
+        <OutputType>Library</OutputType>
+        <TargetFramework>netstandard2.0</TargetFramework>
+        <AssemblyName>AutoCADHost</AssemblyName>
+        <RootNamespace>AutoCADHost</RootNamespace>
+        <LangVersion>latest</LangVersion>
+        <PlatformTarget>x64</PlatformTarget>
+        <NuGetAudit>false</NuGetAudit>
+    </PropertyGroup>
 
-  <ItemGroup>
-    <Compile Include="Host.fs" />
-    <!-- 就绪订阅先编译：Application.executeAsync 要用 Ready.Gate -->
-    <Compile Include="Ready.fs" />
-    <Compile Include="Application.fs" />
-  </ItemGroup>
+    <ItemGroup>
+        <Compile Include="EventPair.fs" />
+        <Compile Include="AcadBeginEnd.fs" />
+        <Compile Include="Application.fs" />
+        <Compile Include="AutoCADTask.fs" />
+    </ItemGroup>
 
-  <ItemGroup>
-    <!-- 线程 / 进程账本 / 窗口 → 进程号 / COM 底层都在这一层，三家共用 -->
-    <ProjectReference Include="..\OsHost\OsHost.fsproj" />
-  </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\OsHost\OsHost.fsproj" />
+    </ItemGroup>
 
-  <ItemGroup>
-    <!--
-      AutoCAD 2020（R23.1）的互操作程序集：随 AutoCAD 安装在安装目录，**不在 GAC**，
-      所以必须 HintPath 指过去 + Private=true 复制到输出目录，运行期才加载得到。
-      换机器/换版本只改这两行 HintPath（或换 tlbimp 从 acax23enu.tlb 现生成一份）。
-    -->
-    <Reference Include="Autodesk.AutoCAD.Interop">
-      <HintPath>C:\Program Files\Autodesk\AutoCAD 2020\Autodesk.AutoCAD.Interop.dll</HintPath>
-      <EmbedInteropTypes>false</EmbedInteropTypes>
-      <Private>true</Private>
-    </Reference>
-    <Reference Include="Autodesk.AutoCAD.Interop.Common">
-      <HintPath>C:\Program Files\Autodesk\AutoCAD 2020\Autodesk.AutoCAD.Interop.Common.dll</HintPath>
-      <EmbedInteropTypes>false</EmbedInteropTypes>
-      <Private>true</Private>
-    </Reference>
-  </ItemGroup>
+    <ItemGroup>
+        <Reference Include="Autodesk.AutoCAD.Interop">
+            <HintPath>C:\Program Files\Autodesk\AutoCAD 2020\Autodesk.AutoCAD.Interop.dll</HintPath>
+            <EmbedInteropTypes>false</EmbedInteropTypes>
+            <Private>true</Private>
+        </Reference>
+        <Reference Include="Autodesk.AutoCAD.Interop.Common">
+            <HintPath>C:\Program Files\Autodesk\AutoCAD 2020\Autodesk.AutoCAD.Interop.Common.dll</HintPath>
+            <EmbedInteropTypes>false</EmbedInteropTypes>
+            <Private>true</Private>
+        </Reference>
+        
+        <PackageReference Update="FSharp.Core" Version="11.0.101" />
+        
+    </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="10.1.403" />
-  </ItemGroup>
 
 </Project>

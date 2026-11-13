@@ -24,13 +24,13 @@
     <Compile Include="Session.fs" />
     <Compile Include="ConvertCore.fs" />
     <Compile Include="Convert.fs" />
-    <!-- Rx 版两条命令：进程生命周期事件流 + 组合子编排，前部公用件 -->
-    <Compile Include="ProcRx.fs" />
-    <!-- 黑板模式：参考解析（展示文本 → 参数表，只供调用方参考）+ 四家 GetApplication(info) 的验证 -->
+    <!-- 黑板模式：参考解析（展示文本 → BoardApp / BoardDoc，只供调用方参考）+ 挂回验证 -->
     <Compile Include="BlackboardText.fs" />
     <Compile Include="BlackboardTest.fs" />
-    <!-- 另一条路：与 AppKind 解耦的通用参数表；复用 BlackboardProbe，故排在黑板之后 -->
-    <Compile Include="GeneralAppInfoTest.fs" />
+    <!-- ROT 的两个方向（注册名 ↔ 进程号）：离线，只登记一条自己的条目 -->
+    <Compile Include="RotTest.fs" />
+    <!-- OsHost.Sta：固定 STA 线程的单例语义（同一线程 / 先进先出 / 自等报错 / 关停），离线 -->
+    <Compile Include="StaThreadTest.fs" />
     <Compile Include="HostGreetingTest.fs" />
     <Compile Include="SecondProcessTest.fs" />
     <Compile Include="CollaborationTest.fs" />
@@ -64,8 +64,6 @@
     <Compile Include="DocSyncTest.fs" />
     <!-- 山西太钢技术协议：挂回正开着的 Word，只读读出燃烧器的燃料量 / 助燃风量 -->
     <Compile Include="TaigangProtocolTest.fs" />
-    <Compile Include="CommandTest.fs" />
-    <Compile Include="RxCommandTest.fs" />
     <Compile Include="PptUpgradeTest.fs" />
     <!-- 五角星：纯几何源文件链接进来，Fact 验的公式就是插件画图用的那一份 -->
     <Compile Include="..\AcadMgdHost\StarGeometry.fs" Link="StarGeometry.fs" />
@@ -73,21 +71,30 @@
     <!-- 一对 Begin/End 事件 → 一个 Task：假事件源离线自检（排在挂回之前，两者各自独立） -->
     <Compile Include="FakeEventPair.fs" />
     <Compile Include="EventPairTest.fs" />
-    <!-- AutoCADHost.Task（Task.fs）：按 PID 挂回 + 命令/LISP 的 Task 入口；真机那条等 EndCommand + LISP 结果文件 -->
+    <!-- AutoCADHost.AutoCADTask（AutoCADTask.fs）：按 PID 挂回 + 命令/LISP 的 Task 入口；真机那条等 EndCommand + LISP 结果文件 -->
     <Compile Include="AcadAttachTest.fs" />
+    <!-- PDF 几何图形 → 文字：先把 9 条多段线的顶点转储出来认字，再一次 .lsp 原位写 TEXT -->
+    <Compile Include="AcadPdfTextTest.fs" />
     <!-- ExcelHost.ExcelTask.GetApplicationAsync：按 PID 挂回 Excel（Task 版，与 AutoCAD 同口径） -->
     <Compile Include="ExcelAttachTest.fs" />
+    <!-- Word / PowerPoint 的挂回闸门：只认 pid，不合格就地拒接（离线） -->
+    <Compile Include="AttachGateTest.fs" />
+    <!-- 逐页复制升级 .xls：清点 + 真做（只留公式和普通格式） -->
+    <Compile Include="XlsPageCopyTest.fs" />
     <!-- OsHost.TextFile：读文本认编码 + 短名称注册的验证 -->
     <Compile Include="TextFileTest.fs" />
     <!-- 热风炉计算书摘要：先只读转储 Excel 计算书，再往用户开着的 Word 里落摘要 -->
     <Compile Include="StoveSummaryTest.fs" />
+    <!-- 热风炉报价单：按旭日单结构 + 本项目计算书结果，写进用户开着的「热风炉报价表.xlsx」 -->
+    <Compile Include="StoveQuoteTest.fs" />
+    <Compile Include="StoveDocTest.fs" />
+    <Compile Include="StoveNoXllTest.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="10.1.403" />
+    <PackageReference Update="FSharp.Core" Version="11.0.101" />
     <PackageReference Include="FSharp.xUnit" Version="1.4.1" />
-    <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.2" />
-    <PackageReference Include="System.Reactive" Version="6.0.2" />
+    <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.3" />
   </ItemGroup>
 
   <ItemGroup>

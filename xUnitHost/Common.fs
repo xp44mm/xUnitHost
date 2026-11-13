@@ -13,6 +13,7 @@ open System
 open System.Diagnostics
 open System.IO
 open System.Threading
+open System.Threading.Tasks
 open Xunit
 open OsHost
 
@@ -20,7 +21,7 @@ open OsHost
 module internal Report =
 
     /// 当前同名进程的进程号集合（转给操作系统层，测试里少写一层名字）
-    let procIds (name: string) : Set<int> = Proc.ids name
+    let procIds (name: string) : Set<int> = Process.ids name
 
     /// Word 正文末尾带段落标记，读回来统一去掉
     let marks = [| '\r'; '\a'; '\n'; ' ' |]
@@ -38,6 +39,11 @@ module internal Report =
         match result with
         | Ok value -> value
         | Error message -> failwith message
+
+    /// 等一个 Task 拿结果：失败就抛它自己带的异常（信息原样，不再包一层）。
+    /// **只能在固定 STA 线程之外等** —— 在 `Sta.run` 的活儿里等，等于自己等自己，会死锁；
+    /// 那种场合要用 `Sta.runAsync` 交回 Task，让调用方在外面等。
+    let await (work: Task<'T>) : 'T = work.GetAwaiter().GetResult()
 
     /// 本地时间 → Unix 毫秒（和地址里的算法一致，用来核对「最后保存」那一刻）
     let unixMs (t: DateTime) : int64 = Clock.unixMs t

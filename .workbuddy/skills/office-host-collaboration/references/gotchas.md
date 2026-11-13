@@ -24,8 +24,8 @@
   消费侧造同一个 moniker 用 `IRunningObjectTable.GetObject` 取回（`OsHost.Com.runningAt`）。
   别枚举 ROT，更别退回 `GetActiveObject` —— 多实例机器上那等于认错人。自测要登记就登记自己 new 的托管对象，
   并记得 `Revoke`。
-- **返回的 Application 不能跨临时 STA 线程**：`GetApplication` 在 `Sta.run` 固定长活线程上附着，
-  后续读写也包 `Sta.run`；用 `Sta.here` 的临时线程一退出，就没人给这个 RCW 泵消息了。
+- **返回的 Application 不能跨临时 STA 线程**：`GetApplicationAsync` 只负责把对象取出来，
+  后续读写都包 `Sta.run` / `Sta.runAsync`；用 `Sta.here` 的临时线程一退出，就没人给这个 RCW 泵消息了。
 - **`AccessibleObjectFromWindow` + `OBJID_NATIVEOM` 要求最内层文档窗口**：Word 是 `_WwG`、
   Excel 是 `EXCEL7`（XLDESK 的子窗口），敲在顶层 `OpusApp`/`XLMAIN` 上一律 `E_FAIL`。
 
@@ -42,9 +42,30 @@
 
 ## AutoCAD 冷启动
 
-- 刚起来时 `GetAcadState().IsQuiescent` 会**短暂假报 true**，这时动它就是 `RPC_E_SERVERFAULT`，
-  甚至进程直接崩。必须「连中 5 次 + 静置 1.5 秒」才算就绪。
-- 冷启动分钟级，别在没有实例的机器上反复试。
+- **别靠轮询 `GetAcadState().IsQuiescent` 判就绪**：它刚起来时会短暂假报 true，这时动它就
+  `RPC_E_SERVERFAULT` 甚至崩；而「连中 N 次 + 静置」那套（原 `Ready.fs`）**挡不住 `RPC_E_CALL_REJECTED`，已废弃删除**。
+  等就绪一律用事件：`AutoCADTask.sendCommandAsync` / `openDrawingAsync` / `runLispAsync` 各自等自己的 End 事件。
+- 冷启动分钟级，别在没有实例的机器上反复试；本机通常开着一只，按 PID 挂回就行。
+
+## AutoCAD：命令 / LISP 的完成判据
+
+- **`SendCommand` 返回 ≠ 命令跑完**：它同步返回只代表「已交给 AutoCAD」。等 `EndCommand`
+  用 `AutoCADHost.AutoCADTask.sendCommandAsync`；裸发之后立刻发下一条会撞 `RPC_E_CALL_REJECTED`。
+- **命令行串必须自带换行**（`"_.ZOOM\n_E\n"`）：少一个换行，最后一个词留在命令行上等输入，
+  整只 acad 一直「忙」，后面所有调用都被拒。
+- **LISP 有事件**：`BeginLisp` / `EndLisp` / `LispCancelled`（互操作里就是这个大小写，
+  不是全大写 LISP）。一整段 `(progn …)` 是一个求值整体 —— 内部 `(command "_.LINE" …)` 的
+  Begin/EndCommand 先各自走完，最后才来 EndLisp；等命令事件会**提前返回**。
+  真机（R23.1）已验证 `SendCommand` 送进去的 LISP 确实派 `BeginLisp → EndLisp`。
+- **`EndLisp` = 求值结束，≠ 成功**：AutoLISP 的求值错误只在命令行打印一行、不回报调用方。
+  要数据/判成败就让 LISP 自己写结果文件；`File.Exists` 不算判据（`open` 之后文件就存在、内容是空的），
+  要「能独占打开且内容非空」。
+- **`(getvar "PID")` 在 R23.1 上不存在**（返回 `nil`），要证明「跑在哪只 acad 里」写
+  `(getvar "DWGNAME")` / `(getvar "ACADVER")`，对照 COM 的 `ActiveDocument.Name`。
+- **写文件用 `(vl-princ-to-string …)`，别用 `itoa`**：碰到 `nil` / 实数直接报错，只留下 0 字节文件，
+  而且句柄还挂在 acad 里把文件锁住（F# 侧读会一直超时）。上一次没 close 的句柄要在下次代码开头
+  `(if bet-f (close bet-f))` 兜一下。
+- 测试里跑 LISP 优先选**只读**命令（`_.DIST`），别用 `_.LINE` / `_.CIRCLE` 往用户图纸里加实体。
 
 ## 地址 / 指纹
 
@@ -76,17 +97,44 @@
   父进程给 `StandardOutputEncoding` 也设 UTF-8。控制台程序也一样，不然中文路径全成乱码。
 - 项目文件统一 **UTF-8 + BOM、CRLF**，否则 F# 编译器对中文注释/字符串可能报错。
 
+## `task {}` 与异步 Fact
+
+- **Fact 直接写成 `member this.``中文一句话``() : Task = task { … }`**（xunit v3 认 `Task` 返回值）。
+  别写 `let work = task { … }` 再 `work.GetAwaiter().GetResult()` —— 异常被包成 `AggregateException`、还白占一条线程；
+  存量文件里有这种写法，新写的一律直接返回 `Task`。
+- **`let!` / `do!` 不许省**：`let _ = xxxAsync` 是 fire-and-forget，等于没等（「直线没画上」就是这么来的）。
+- **`Report.await` 只能在 STA 之外用**：它阻塞等 Task，在 `Sta.run` 的活儿里等就是自己等自己，直接死锁。
+  要在固定 STA 上串下一段，用 `let! x = Sta.runAsync(fun () -> …).Unwrap()`。
+- 库里的同步入口（`Host.GetOrCreateApplication` / `Host.exec*` / `DocIO.*`）不会替你切线程：
+  排进固定 STA 一律 `Sta.runAsync(fun () -> …).Unwrap()`，或干脆用 `*Async` 成品入口。
+- RCW 拿到手不等于随处能用：`await` 之后每一步读写仍要包 `Sta.run`。
+
 ## 格式转换（doc→docx / docm、xls→xlsx / xlsm）
 
 - **`UsedRange` 的行列数在 .xls 与 .xlsx 之间会不一样**（只有格式的空列算不算），拿尺寸当指纹会假报警。
   比内容就只比「表名 + 格子里的值」。
 - **空表不算内容**：.xls 里常多出 Sheet2/Sheet3（只有格式没值），转成 xlsx 后可能就没了，不必报警。
-- **`Workbook.HasVBProject` / `Document.HasVBProject` 判宏**：有宏的 `.xls → .xlsm`、`.doc → .docm`，
-  硬转无宏格式等于删掉宏；**判不出宏就报失败、原件保留**，绝不猜「没宏」。转成 .docm / .xlsm 后还要
-  再读一遍 `HasVBProject` 复核宏还在。
+- **`Workbook.HasVBProject` / `Document.HasVBProject` 判宏**：`.xls` 有宏 → `.xlsm`，硬转无宏格式等于删掉宏；
+  **判不出宏就报失败、原件保留**，绝不猜「没宏」。转成 `.xlsm` 后还要再读一遍 `HasVBProject` 复核宏还在。
+- **Word 反过来：`.doc` 一律存 `.docx`，宏不保留**（用户 2026-11-11 定）——老 `.doc` 的 VBA 工程多半被
+  「锁定工程」保护，`SaveAs .docm` 也会丢（ForceDisable / ByUI / 开 `AccessVBOM` 都试过），硬保只会白卡文件；
+  `XUNITHOST_DOC_KEEP_MACRO=1` 才走 `DocToDocm`。
 - **删之前先清只读属性**：压缩包/邮件来的文件带 ReadOnly，`File.Delete` 直接 `Access denied`。
 - 转换要写成「转完立刻读回来比对，一致才算成功」；不一致就保留原件，绝不允许「先删后转」。
 - 删原件单独一条命令，只认得到「核对通过」的清单文件；清单别写 BOM，否则按 `"OK\t"` 匹配会漏第一条。
+
+## 读文本文件：别自己猜编码、别手切行
+
+- **一律走 `OsHost.TextFile.decodeAllLinesAsync`（短名 `lines`）**，它一次解决两件事：
+  编码（BOM → ascii → UTF-8/GBK 严格试解码，歧义标 `utf-8|gbk`）和行末（`\r\n`/`\n`/`\r` 都切，末尾不多空行）。
+- `File.ReadAllLines` 默认 UTF-8：GBK 的 `.lsp` / 老日志 / 插件写的结果文件一读就是一片 `�` 或者干脆抛
+  `DecoderFallbackException`；自己 `Encoding.GetEncoding "gb2312"` 又会把 UTF-8 读坏。两边都"看着像对的"，
+  最容易把错数据当真值写进报告。
+- 手切行常犯两个错：只认 `\r\n`（Linux/Mac 来的文件整篇算一行）、`split` 之后不剥末尾空行
+  （行数比真实多 1，按行号取值的断言全跟着偏）。
+- **无 BOM 且 UTF-8 / GBK 都能解时它报 `utf-8|gbk`**：这是设计如此 —— 别在 Fact 里断言"等于 gbk"，
+  要么接受两个值，要么拿一条已知内容（比如 ASCII 的标记行）当锚。
+- 反过来，**写**文件仍按项目约定：UTF-8 + BOM + CRLF；别拿读函数的宽松去放松写入。
 
 ## 测试卫生
 
@@ -111,7 +159,10 @@
   `-method "*第二个进程*"` 只跑那一条。子进程的回话**写文件**（`XUNITHOST_SAY_AT`），
   别去挑 stdout —— 那里面混着跑框架的输出。读 stdout 和 stderr 要一路并行抽，
   两头都读才不会把管道写满僵住。
-- **黑板展示文本不进生产库**：`GeneralAppInfo` 是调用方按字段填的结构化参数表，
-  身份 `GeneralIdentity` 取各家 Host 的 `SelfIdentity`；`OsHost` 里没有 `ofText`、也没有展示用的标题字段。
-  把「`KEY : value` 的排版」写进库，等于把插件的显示格式变成隐含契约，插件一改文案库就跟着改。
-  参考解析只在测试项目 `xUnitHost/BlackboardText.fs`（产出 `GeneralAppInfo`），格式紧耦合就锁在那儿。
+- **黑板展示文本不进生产库**：`OsHost` 里没有 `ofText`、没有展示用的标题字段，2026-11-13 起也没有「参数表」了
+  ——挂回只认 pid。把「`KEY : value` 的排版」写进库，等于把插件的显示格式变成隐含契约，插件一改文案库就跟着改。
+  参考解析只在测试项目 `xUnitHost/BlackboardText.fs`（`ofText → BoardApp`、`docOfText → BoardDoc`），
+  格式紧耦合就锁在那儿。
+- **Word 零文档时认不出 pid 就拒绝，不要退回「随便接一只」**：`pidOf` 靠 `ActiveWindow` 上溯 `OpusApp`，
+  一份文档都没开时是 None。此时按 ROT 名后缀（`!WordVSTO.Instance.<pid>`）认；两样都对不上就报错。
+  以前 `matchApp` 在 None 时直接 `Ok app`（认不出就不反驳），多实例机器上会认错人 —— 现在是拒绝。

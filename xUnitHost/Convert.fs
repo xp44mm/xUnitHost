@@ -85,6 +85,15 @@ module Convert =
         : Outcome list =
         items |> List.map(fun i -> WordHost.DocUpgrade.convert app i.Source |> toOutcome i)
 
+    /// 常驻 PowerPoint（挂回式）：app 是 `PowerPointHost.Host.GetApplication info` 交回的**现成实例**。
+    /// 只逐份开/关自己那一份 —— 绝不 Quit、绝不新建、绝不关用户开着的演示文稿。
+    /// 调用方必须把这段活包在 OsHost.Sta.run 里（与附着同一条固定 STA 线程）。
+    let showsAttached
+        (app: Microsoft.Office.Interop.PowerPoint.Application)
+        (items: Item list)
+        : Outcome list =
+        items |> List.map(fun i -> PowerPointHost.PptUpgrade.convert app i.Source |> toOutcome i)
+
     /// 一个 PowerPoint 进程里转一批 .ppt：判宏、选路都在 PowerPointHost.PptUpgrade 里
     let shows (items: Item list) : Outcome list =
         if items.IsEmpty then

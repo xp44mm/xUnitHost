@@ -1,7 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Excel 主机（netstandard2.0）：Host.fs 管取/建实例与收尾；末尾 BookIO.fs + XlsUpgrade.fs（.xls 升级统一入口）。
+    Excel 主机（netstandard2.0）：Host.fs 管取/建实例、认人、收尾与一次性命令；ExcelTask.fs 是成品 Task 入口；
+    末尾 BookIO.fs + XlsUpgrade.fs（.xls 升级统一入口）。
     有实例取实例，没有就创建一个；不隐藏窗口、不退出，生命周期归调用方。
     互操作程序集随本库一起输出，消费方不必装 Office PIA。
   -->
@@ -18,9 +19,13 @@
 
   <ItemGroup>
     <Compile Include="Host.fs" />
+    <!-- 成品 Task 入口单独一份（照 AutoCADTask.fs）：只做闸门 + 排 STA + 抛成 faulted -->
+    <Compile Include="ExcelTask.fs" />
     <!-- 末尾：XlsToXlsx / XlsToXlsm / XlsUpgrade 三个入口合在一份文件里；BookIO 是共用 COM 细节 -->
     <Compile Include="BookIO.fs" />
     <Compile Include="XlsUpgrade.fs" />
+    <!-- 逐页复制升级：一张一张抄表、在副本里清掉新格式带不走的东西（只留公式和普通格式） -->
+    <Compile Include="SheetCopy.fs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -41,7 +46,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="10.1.403" />
+    <PackageReference Update="FSharp.Core" Version="11.0.101" />
   </ItemGroup>
 
 </Project>

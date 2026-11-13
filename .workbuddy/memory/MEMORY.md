@@ -1,10 +1,11 @@
 ﻿# xUnitHost 项目长期笔记
 
 ## 铁律
-- 真机 Word/Excel/PPT/acad 干活前，先读 `.workbuddy/skills/office-host-collaboration/SKILL.md`（含 `references/api.md`、`gotchas.md`）。
-- **acad 驱动只用 `AutoCADHost.Task` 的现成函数**（命令等 EndCommand、LISP 等 EndLisp、按 PID 挂回），不许手拼 `SendCommand` / 自订阅事件。
+- 真机 Word/Excel/PowerPoint/AutoCAD 干活前，先读 `.workbuddy/skills/office-host-collaboration/SKILL.md`（含 `references/api.md`、`gotchas.md`）。
+- **AutoCAD 驱动只用 `AutoCADHost.AutoCADTask` 的现成函数**（命令等 EndCommand、LISP 等 EndLisp、按 PID 挂回），不许手拼 `SendCommand` / 自订阅事件。
+- **访问代码先找 `*Async` 入口，用 `task {}` 表达式串**（`let!` / `do!`，不许 `let _ =`）；Fact 写成 `member this.``中文``() : Task = task { … }`，别用 `let work = task { … }` + `.GetAwaiter().GetResult()` 收尾。
 - 顺序：**写 Fact → `dotnet build xUnitHost.slnx -v q`（0 警告 0 错误）→ 单跑 `-m "*关键字*" -showLiveOutput` → 才动真机 → 汇报四段**（做了什么 / 贴 output / 代码与 Fact 名 / 现场进程是否干净）。代码留项目当记录。
-- 用户平时开着 Office/acad：只跑 `-m`，别跑 `-a`；从零起实例的 Fact 用 `requireClean`，不干净就 `Assert.Skip`，**绝不为跑通去关用户实例**。
+- 用户平时开着 Office/AutoCAD：只跑 `-m`，别跑 `-a`；从零起实例的 Fact 用 `requireClean`，不干净就 `Assert.Skip`，**绝不为跑通去关用户实例**。
 
 ## 项目与命令
 `OsHost`（OS 层 / `Address` / `ProcHost` / `GeneralAppInfo` / `TextFile`）、`WordHost`、`ExcelHost`、`PowerPointHost`、`AutoCADHost`、`AcadMgdHost`、`xUnitHost`（xunit v3，**直接跑 exe，不能用 `dotnet test`**）。**不许私自新建项目**。
@@ -17,24 +18,28 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -method "*关键字*" -noColor -showLi
 ## 四个挂回入口（只认这些）
 | 程序 | 入口 | 闸门 / 注意 |
 |---|---|---|
-| Word | `WordHost/WordTask.fs` → `WordTask.GetApplicationAsync info`（Task 版，2026-11-11 从 `Host.GetApplication` 挪来，**唯一**） | `GeneralAppInfo.verify` 纯查进程表、同步 faulted；`pidOf` 要 `ActiveWindow` 上溯 `OpusApp`，没开文档返回 None（不反驳）。Fact `-m "*通用参数表*"`，真机 `XUNITHOST_WORD_PID` |
-| Excel | `ExcelHost/ExcelTask.fs` → `ExcelTask.GetApplicationAsync pid`（**唯一**，info 版 11-10 已删） | `Application.Hwnd`→PID；Fact `ExcelAttachTest.fs`，真机 `XUNITHOST_EXCEL_PID` |
-| PPT | `PowerPointHost.Host.GetApplication info`（`: Result<_,_>`） | 只做方式一，无会话层 |
-| acad | `AutoCADHost/Task.fs`（`module AutoCADHost.Task`）：`GetApplicationAsync pid` / `commandAsync` / `sendCommandAsync` / `modalAsync` / `openDrawingAsync` / `sendLispAsync`(不等) / `sendLispAndWaitAsync`·`runLispAsync`·`runLispFileAsync`(等 EndLisp) | 参数收 `IAcadApplication`/`IAcadDocument`；`EventPair` 不认 COM，`AcadBeginEnd` 只剩接线；**`Ready.fs` 已废弃**（IsQuiescent 挡不住 RPC_E_CALL_REJECTED） |
+| Word | `WordHost/WordTask.fs` → `WordTask.GetApplicationAsync pid`（Task 版，**唯一**） | `Host.checkPid` 纯查进程表、同步 faulted；`pidOf` 要 `ActiveWindow` 上溯 `OpusApp`，没开文档退到 ROT 名后缀（`!WordVSTO.Instance.<pid>`），都对不上就拒（不再「认不出就不反驳」）。Fact `-m "*不合格*"`，真机 `XUNITHOST_WORD_PID` |
+| Excel | `ExcelHost/ExcelTask.fs` → `ExcelTask.GetApplicationAsync pid`（挂回，**唯一**）、`getOrCreateOnSta()`（起或取·同步，**必须已在固定 STA 上**）/ `GetOrCreateApplicationAsync()`（同一件事排进 STA） | `Application.Hwnd`→PID；Fact `ExcelAttachTest.fs`，真机 `XUNITHOST_EXCEL_PID` |
+| PPT | `PowerPointHost.Host.GetApplication pid`（`: Result<_,_>`） | 只做方式一，无会话层 |
+| AutoCAD | `AutoCADHost/AutoCADTask.fs`（`module AutoCADHost.AutoCADTask`）：`GetApplicationAsync pid` / `commandAsync` / `sendCommandAsync` / `modalAsync` / `openDrawingAsync` / `sendLispAsync`(不等) / `sendLispAndWaitAsync`·`runLispAsync`·`runLispFileAsync`(等 EndLisp) | 参数收 `IAcadApplication`/`IAcadDocument`（接口，不是 coclass）；`EventPair` 不认 COM，`AcadBeginEnd` 只剩接线；**`Ready.fs` 已废弃**（IsQuiescent 挡不住 RPC_E_CALL_REJECTED） |
 
 - 判定链 `Host.checkPid / findOnSta / unwrap`、`matchApp` 已公开，留在各 `Host.fs`。
-- 黑板（VSTO 抄 PID/ROT/EXE/文档）只挂回那一只，不新建不 Quit。**黑板常量写死在测试文件里**（`BlackboardText.ofText`），用户换进程/重开文件必须同步改（11-10 遇过 28884→14052）。
+- **ROT 名 ↔ pid 分两层**：通用 `OsHost.Rot.parse` / `build`（只认「<前缀><pid>」形状，纯字符串）；前缀固化在 `WordHost.Rot`（`!WordVSTO.Instance.`）/ `PowerPointHost.Rot`（`!PowerPointVSTO.Instance.`）的 `Prefix`，各自的 `pidOf` 只认自家前缀、`nameOf` 由前缀拼。Excel / AutoCAD 只按 `Hwnd → pid` 认人，暂无名字路径。别再手写 `LastIndexOf '.'`。Fact `-m "*ROT 前缀*"`（离线）。
+- **`Address.fs` / `ProcHost.fs`（通用起停两条命令）及其 Fact（`CommandTest` / `ProcRx` / `RxCommandTest`）已于 2026-11-13 删除**：那条线只剩 `Session.fs` 一条路；`Identity.fs` 保留（`type Stamp = Identity`）。别再去找 `ProcAddress` / `ProcHost.start`。
+- **`GeneralAppInfo` 已于 2026-11-13 整份删除**（含 `verify` / `attachWith` / `defaultAcquire` / `GeneralDocInfo` / `GeneralAppInfoTest.fs`）：四家挂回只认 pid，形状一致；黑板文本的参考解析留在 `xUnitHost/BlackboardText.fs`（`BoardApp` / `BoardDoc`，只服务测试项目）。Word 零文档时按 ROT 名后缀认，对不上就拒绝（旧行为是「认不出就不反驳」，多实例会认错人）。
 - 独立 `Host.exec*`（要求本机没有同类进程）vs 合作 `openSession`→`execByAddress`→`close`；每步用新地址，绝不自拼；只有 `Owned=true` 才真关。
 - 改用户**已打开的真表/真文档**：备份到项目目录外 → 逐行核对现场 → 只改点名处 → `Save()` → 读回 → 另用 zip+XML 独立核磁盘字节。
 
 ## 测试风格
-一个类 + 构造函数拿 `ITestOutputHelper`，Fact 是成员方法 `member this.``中文一句话``()`，纯函数放模块里且在类之前。报告写进 `output`：`Report.title` → `line` / `line2 output 标签 子标签 内容` → `conclusion`，一行一个真实值。断言 `Should.equal 期望 实际`（`FSharp.xUnit`）。必须 `-showLiveOutput`。
+一个类 + 构造函数拿 `ITestOutputHelper`，Fact 是成员方法 `member this.``中文一句话``() : Task = task { … }`（异步任务定义，`let!` / `do!` 串 COM 访问），纯函数放模块里且在类之前。报告写进 `output`：`Report.title` → `line` / `line2 output 标签 子标签 内容` → `conclusion`，一行一个真实值。断言 `Should.equal 期望 实际`（`FSharp.xUnit`）。必须 `-showLiveOutput`。
+- 能在 `task {}` 里 await 的就别套 `Report.await`（它阻塞等待，**禁止在 `Sta.run` 的活儿里用**，会自己等自己死锁）。
+- 旧写法 `let work = task { … }` + `work.GetAwaiter().GetResult()` 只剩存量文件里有，新写一律直接返回 `Task`。
 
 ## Excel / XLL 的坑
 - **`Range.Formula` 会给自定义函数补 `@`，`Formula2` 不补**；动态数组必须 `Formula2` 才能 spill。批量写公式一律 `Formula2`。
 - XLL 名：`Evaluate`/公式栏不带前缀，磁盘 XML 才存 `_xll.`；数组函数 = 单锚点 + `<f t="array" ref="C7:C9">`。
 - `-2146826259` / `#NAME?` 往往只是**那个 Excel 进程没加载插件**：先 `Evaluate` 探测。
-- 起 Excel 用 `ExcelHost.Host.GetOrCreateApplication()`（会把 XLL 一起加载），别自己 `Com.create` 隐藏实例；拿到 app 先 `Evaluate` 探 `空气体积成分` / `gasMoleEnthalpy`。
+- 起 Excel 用 `ExcelHost.ExcelTask.getOrCreateOnSta()`（在 `Sta.run` 里）或 Task 版 `GetOrCreateApplicationAsync()`（都一样会把 XLL 一起加载；2026-11-13 从 `Host.GetOrCreateApplication` 内联进 `ExcelTask.fs`），别自己 `Com.create` 隐藏实例；拿到 app 先 `Evaluate` 探 `空气体积成分` / `gasMoleEnthalpy`。
 - **`0x800A03EC` / 静默 `#NAME?` 常见于以 `=` 开头的说明文本**（`Formula` 与 `Value2` 都一样，11-11 D11 踩过）。写完扫一遍 `Range(addr).Text` 有无 `#` 错值（整块取会抛，逐格取）。
 - 批量写：先收集 (地址,值) → 校验现有非空地址都在清单内 → 统一落笔；spill 锚点写前 `ClearContents`。
 - **同会话起不出两本同名工作簿**：`Workbooks.Open` 第二个同名文件静默失败（返回 null、`Worksheets.Count` 为 0）。先 `File.Copy` 成带来源标记的副本（`BurnerCatalogTest.Item.Alias`）。
@@ -44,10 +49,12 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -method "*关键字*" -noColor -showLi
 - COM 差异：Word Open/SaveAs 是 `obj&`，Excel 是 `object`，**PPT 强类型按值**；`Presentation.Close()` 无参；`DisplayAlerts <- ppAlertsNone`。
 - 源文件 UTF-8 + BOM、CRLF；子进程输出中文先 `Console.OutputEncoding <- UTF8`；例外 `AcadMgdHost/test/run.cmd` 纯 ASCII 无 BOM。
 - **`.lsp` 必须 GBK + CRLF**（AutoCAD 2020 R23.1 按本地 ANSI 读，UTF-8 带 BOM 的 `(load ...)` 直接失败）；生成前检查 GBK 字节不含 `"` `\` `(` `)`。
-- **`(getvar "PID")` 在 R23.1 返回 nil**；证明跑在哪只 acad 用 `(getvar "DWGNAME")` / `ACADVER`。写文件一律 `(vl-princ-to-string …)`，别用 `itoa`（nil/实数报错 → 0 字节文件 + 文件锁）。
+- **`(getvar "PID")` 在 R23.1 返回 nil**；证明跑在哪只 AutoCAD 用 `(getvar "DWGNAME")` / `AutoCADVER`。写文件一律 `(vl-princ-to-string …)`，别用 `itoa`（nil/实数报错 → 0 字节文件 + 文件锁）。
 - **LISP 有事件**：`BeginLisp`/`EndLisp`/`LispCancelled`；`(progn …)` 内嵌 `(command …)` 的 Begin/EndCommand 先走完、**最后才 EndLisp** —— 等「跑完」只等 EndLisp。`EndLisp` ≠ 成功（求值错误只打印在命令行），要数据让代码自己写结果文件。
 - `task` CE 里 `let _ = xxxAsync` = fire-and-forget（「直线没画上」的根因），一律 `let!` / `do!`。
 - 递归扫跳过 `.` 开头 / `.idx_cache` / `~$`；项目根已 `git init`。
+- **`OsHost.STA` 的模块名是全大写 `STA`**（`module OsHost.STA`，代码里一律 `STA.run` / `STA.runAsync` / `STA.here`；`Sta.` 只留在旧注释和文档行文里）。改成 `Sta` 会立刻炸掉 host 库里 8 个调用点 —— F# 大小写敏感，别“顺手规范”它。
+- `OsHost/STA.fsi` 是**唯一带签名文件**的一份，写法必须是**顶层 `module OsHost.STA` + 列 0 的 `val`**（`namespace OsHost` + `module Sta =` 那种会报 FS0240，因为实现是顶层点号模块）。对外只有 `run` / `runAsync` / `here` / `shutdown` 四个。
 - 读来路不明的文本一律 `OsHost.TextFile.decodeAllLinesAsync`（`lines` / `dec`），别 `File.ReadAllLines`。
 
 ## 焦炉煤气燃烧计算书（`C:\崔胜利\群有\中冶南方都市环保\焦炉煤气燃烧计算书.xlsx`）
@@ -61,5 +68,5 @@ xUnitHost/bin/Debug/net10.0/xUnitHost.exe -method "*关键字*" -noColor -showLi
 - **助燃风机**（同表 67~102 行）：`C68=C36*(273.15+C71)/273.15`、`C69=ROUNDUP(E69,-2)`；选型 16500 m³/h、4.5 kPa、60% → 轴功率 34.375 kW → 电机 45 kW；风压分项合计 4419 Pa（差 −81）。待厂家确认：`C87` 本体阻力、`C82` 管长、`C83` λ、`C85` Σζ。
 
 ## 转换规则（默认不问）
-**Word 的宏一律不保留，统一存 `.docx`**（用户 2026-11-11 定）——老 `.doc` 的 VBA 工程多半被「锁定工程」保护，Word 自己 `SaveAs .docm` 也会丢（ForceDisable / ByUI / 开了 `AccessVBOM` 都试过），保宏只会白卡文件；`DocToDocm` 留着，`XUNITHOST_DOC_KEEP_MACRO=1` 才走。`.xls`→`.xlsx`/`.xlsm`；`.ppt`→`.pptx`/`.pptm`。**转一份读回比一份**；只删 `canDelete`，删前备份。
+**Word 的宏一律不保留，统一存 `.docx`**（用户 2026-11-11 定）——老 `.doc` 的 VBA 工程多半被「锁定工程」保护，Word 自己 `SaveAs .docm` 也会丢，保宏只会白卡文件；`DocToDocm` 留着，`XUNITHOST_DOC_KEEP_MACRO=1` 才走。`.xls`→`.xlsx`/`.xlsm`；`.ppt`→`.pptx`/`.pptm`。**转一份读回比一份**；只删 `canDelete`，删前备份。
 常驻 Excel 挂回式通道（`.xls` 只走这条）：只用 `ExcelTask.GetApplicationAsync pid`，不新建不 Quit 不 kill，只关自己那本；打开老 `.xls` 会改写原件 → 失败前从备份还原；常驻实例反复挂回会劣化，**卡住就重启 Excel**。

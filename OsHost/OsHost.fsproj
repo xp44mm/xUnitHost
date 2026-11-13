@@ -2,7 +2,7 @@
 
   <!--
     操作系统层（netstandard2.0）：STA 线程、进程账本、窗口 → 进程号、时间、文件时间、COM 底层，
-    以及「常驻进程」的地址格式（Address.fs）和起 / 关两条通用命令（ProcHost.fs）。
+    以及「现场快照」Identity（会话层地址里的指纹就是从它来的）。
     三家 host 库都引它 —— 这些活儿三家一模一样，只该有一份。
     不认 Office 类型，所以也不需要任何互操作程序集：只认句柄、进程号和 IUnknown。
   -->
@@ -17,20 +17,27 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="OsHost.fs" />
-    <!-- 黑板模式：与种类完全解耦的通用参数表，身份用参数、取对象用注入函数占位 -->
-    <!-- 旧路 AppKind / AppInfo 已按用户决定删除（2026-11-07 14:11），四家身份常量搬进各自 Host -->
-    <Compile Include="GeneralAppInfo.fs" />
-    <Compile Include="Address.fs" />
-    <Compile Include="ProcHost.fs" />
+    <Compile Include="Clock.fs" />
+    <Compile Include="Paths.fs" />
+    <Compile Include="Errors.fs" />
+    <Compile Include="Process.fs" />
+    <Compile Include="Win32.fs" />
+    <Compile Include="COM.fs" />
+    <!-- 签名在前、实现在后：对外只有 run / runAsync / here / shutdown 四个，其余全是 private -->
+    <Compile Include="STA.fsi" />
+    <Compile Include="STA.fs" />
     <!-- 读文本：BOM 优先 + 无 BOM 的 UTF-8/GBK/ASCII 歧义判定；短名称注册也在这一份 -->
     <Compile Include="TextFile.fs" />
+    <!-- ROT 的两个方向：注册名 ↔ 进程号（名字最后一段就是 pid；反查要枚举 ROT） -->
+    <Compile Include="Rot.fs" />
+    <!-- 现场快照 Identity：地址里的指纹来源（会话层 `type Stamp = Identity`） -->
+    <Compile Include="Identity.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="10.1.403" />
+    <PackageReference Update="FSharp.Core" Version="11.0.101" />
     <!-- GBK(936) 在 .NET Core / .NET 5+ 上要靠代码页 provider 才取得到 -->
-    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.0" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="11.0.0" />
   </ItemGroup>
 
 </Project>

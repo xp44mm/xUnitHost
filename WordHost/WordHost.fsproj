@@ -18,6 +18,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- WordVSTO 的 ROT 名：前缀固化在这一家，通用的切 / 拼在 OsHost.Rot -->
+    <Compile Include="Rot.fs" />
     <Compile Include="Host.fs" />
     <!-- 成品 Task 入口单独一份（照 ExcelTask.fs）：只做闸门 + 排 STA + 抛成 faulted -->
     <Compile Include="WordTask.fs" />
@@ -44,7 +46,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="10.1.403" />
+    <PackageReference Update="FSharp.Core" Version="11.0.101" />
   </ItemGroup>
 
 </Project>

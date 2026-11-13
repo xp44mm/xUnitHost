@@ -45,13 +45,11 @@ open OsHost
 type Kind =
     | Word
     | Excel
-    | AutoCAD
 
 /// 拿到手的应用对象（三种之一，模式匹配取用）
 type App =
     | WordApp of Microsoft.Office.Interop.Word.Application
     | ExcelApp of Microsoft.Office.Interop.Excel.Application
-    | AcadApp of Autodesk.AutoCAD.Interop.AcadApplication
 
 /// 现场快照：这只 host 此刻是什么样（地址里的指纹就是从它来的）。
 /// 三家 host 各自拍自己的（`WordHost.Host.identity` 之类），形状统一在 `OsHost.Identity`。
@@ -112,7 +110,6 @@ module private Registry =
             match a, b with
             | WordApp x, WordApp y -> Object.ReferenceEquals(x, y)
             | ExcelApp x, ExcelApp y -> Object.ReferenceEquals(x, y)
-            | AcadApp x, AcadApp y -> Object.ReferenceEquals(x, y)
             | _ -> false
 
         table.Values |> Seq.exists(fun session -> same session.App app)
@@ -126,13 +123,11 @@ module Host =
         match kind with
         | Kind.Word -> "WINWORD"
         | Kind.Excel -> "EXCEL"
-        | Kind.AutoCAD -> "acad"
 
     let private kindName (kind: Kind) : string =
         match kind with
         | Kind.Word -> "word"
         | Kind.Excel -> "excel"
-        | Kind.AutoCAD -> "cad"
 
     // ---------------- 指纹：拍快照 / 编地址 / 核对 ----------------
 
@@ -158,7 +153,6 @@ module Host =
             match app with
             | WordApp a -> WordHost.Host.identity a
             | ExcelApp a -> ExcelHost.Host.identity a
-            | AcadApp a -> AutoCADHost.Host.identity a
 
         let pid =
             if seen.Pid > 0 then
@@ -166,7 +160,7 @@ module Host =
             elif fallbackPid > 0 then
                 fallbackPid
             else
-                match Proc.ids (imageName kind) |> Set.toList with
+                match Process.ids (imageName kind) |> Set.toList with
                 | [ only ] -> only
                 | _ -> 0
 
@@ -175,7 +169,7 @@ module Host =
         else
             { seen with
                 Pid = pid
-                StartedMs = Proc.startedMs pid |> Option.defaultValue 0L }
+                StartedMs = Process.startedMs pid |> Option.defaultValue 0L }
 
     /// 编地址：种类:pid:启动毫秒:最后保存毫秒:路径指纹:归属
     let private addressOf (kind: Kind) (owned: bool) (stamp: Stamp) : string =
@@ -250,7 +244,7 @@ module Host =
     // 进 host 有两条完全不同的路，别混着用：
     //
     //   · 首次进入（openSession）= 对外签约：从你手上接管，本机没有就真的起一个进程，
-    //     要记「谁起的」（收尾按原状态关），AutoCAD 还要等它冷启动就绪 —— 用 GetOrCreateApplication。
+    //     要记「谁起的」（收尾按原状态关），AutoCAD 还要等它冷启动就绪 —— 用 getOrCreateOnSta（就在 Sta.run 里，别再排一次 STA）。
     //   · 按地址回来（resolve）  = 同事之间打个招呼：只接 ROT 里现成的那只，**绝不新建**。
     //     地址说的人不在就报错 —— 顺手变一个出来，等于把别人的会话顶掉，还认错了人。
 
@@ -258,15 +252,13 @@ module Host =
     let private openApp (kind: Kind) : App =
         match kind with
         | Kind.Word -> App.WordApp(WordHost.Host.GetOrCreateApplication())
-        | Kind.Excel -> App.ExcelApp(ExcelHost.Host.GetOrCreateApplication())
-        | Kind.AutoCAD -> App.AcadApp(AutoCADHost.Host.GetOrCreateApplication())
+        | Kind.Excel -> App.ExcelApp(ExcelHost.ExcelTask.getOrCreateOnSta())
 
     /// 按地址回来：只接现成的那只，没有就是 None（绝不新建）
     let private tryAttachApp (kind: Kind) : App option =
         match kind with
         | Kind.Word -> WordHost.Host.TryGetRunningApplication() |> Option.map App.WordApp
         | Kind.Excel -> ExcelHost.Host.TryGetRunningApplication() |> Option.map App.ExcelApp
-        | Kind.AutoCAD -> AutoCADHost.Host.TryGetRunningApplication() |> Option.map App.AcadApp
 
     let word (session: Session) : Microsoft.Office.Interop.Word.Application =
         match session.App with
@@ -278,10 +270,6 @@ module Host =
         | ExcelApp app -> app
         | _ -> invalidArg "session" "这个会话不是 Excel"
 
-    let acad (session: Session) : Autodesk.AutoCAD.Interop.AcadApplication =
-        match session.App with
-        | AcadApp app -> app
-        | _ -> invalidArg "session" "这个会话不是 AutoCAD"
 
     // ---------------- 会话：建 / 重拍 / 开 / 用 / 收 ----------------
 
@@ -330,13 +318,13 @@ module Host =
     /// 开一个 host：本机已有就复用（不算我们的），没有就起一个（算我们的）。
     /// 返回的 Address 就是「地址」，下一步拿它回来。
     let openSession (kind: Kind) : Session =
-        Sta.run (fun () ->
+        STA.run (fun () ->
             let image = imageName kind
-            let before = Proc.ids image
+            let before = Process.ids image
             let app = openApp kind
 
             // 起之前没有、起之后有了 —— 这些进程是这次自己起的
-            let pids = Set.difference (Proc.ids image) before
+            let pids = Set.difference (Process.ids image) before
             let owned = not pids.IsEmpty
 
             // 自己起的时候进程号是现成的；复用你那只就靠主窗口反查
@@ -346,7 +334,7 @@ module Host =
     /// 除了结果，还会把**重拍过指纹的新 Session**交回去：这一步要是保存了文档，
     /// 新地址就是唯一还有效的那个。
     let exec (session: Session) (action: App -> 'T) : Result<'T * Session, string> =
-        Sta.run (fun () ->
+        STA.run (fun () ->
             try
                 let value = action session.App
                 Ok(value, reseal session)
@@ -372,14 +360,6 @@ module Host =
             | ExcelApp a -> action a
             | _ -> invalidArg "session" "这个会话不是 Excel")
 
-    let execAcad
-        (session: Session)
-        (action: Autodesk.AutoCAD.Interop.AcadApplication -> 'T)
-        : Result<'T * Session, string> =
-        exec session (fun app ->
-            match app with
-            | AcadApp a -> action a
-            | _ -> invalidArg "session" "这个会话不是 AutoCAD")
 
     /// 凭地址找回来（只查本进程的地址簿：快、无副作用。要跨进程用 resolve）
     let findByAddress (address: string) : Session option = Registry.find address
@@ -409,8 +389,6 @@ module Host =
                 match parts.[0].Trim().ToLowerInvariant() with
                 | "word" -> Some Kind.Word
                 | "excel" -> Some Kind.Excel
-                | "cad"
-                | "autocad" -> Some Kind.AutoCAD
                 | _ -> None
 
             match kind with
@@ -475,7 +453,6 @@ module Host =
             match app with
             | WordApp a -> box a
             | ExcelApp a -> box a
-            | AcadApp a -> box a
 
         try
             if not (isNull target) then
@@ -497,7 +474,7 @@ module Host =
         | Ok spec ->
             match Registry.find address with
             | Some cached ->
-                Sta.run (fun () ->
+                STA.run (fun () ->
                     match spec.Stamp with
                     | None ->
                         // 老格式地址：当初就没存指纹，只能原样信地址簿
@@ -510,7 +487,7 @@ module Host =
                         | Ok notes -> Ok(resealWith notes { cached with Stamp = cur }))
             | None ->
                 let image = imageName spec.Kind
-                let alive = Proc.ids image
+                let alive = Process.ids image
 
                 if spec.Pid > 0 && not (alive.Contains spec.Pid) then
                     let now =
@@ -523,7 +500,7 @@ module Host =
                         sprintf "地址已失效：%s（%s 进程 %d 已经不在了，%s）" address image spec.Pid now
                     )
                 else
-                    Sta.run (fun () ->
+                    STA.run (fun () ->
                         match tryAttachApp spec.Kind with
                         | None ->
                             Error(
@@ -578,18 +555,17 @@ module Host =
         Registry.remove session.Address
 
         if session.Owned then
-            Sta.run (fun () ->
+            STA.run (fun () ->
                 (match session.App with
                  | WordApp app -> WordHost.Host.QuitWithoutSaving app
                  | ExcelApp app -> ExcelHost.Host.QuitWithoutSaving app
-                 | AcadApp app -> AutoCADHost.Host.QuitWithoutSaving app)
+                 )
 
                 // 松开 RCW：客户端还捏着引用时，Excel 这类服务器 Quit 了也不肯退
                 let target: obj =
                     match session.App with
                     | WordApp app -> box app
                     | ExcelApp app -> box app
-                    | AcadApp app -> box app
 
                 (try
                     Marshal.FinalReleaseComObject target |> ignore
@@ -602,10 +578,10 @@ module Host =
 
                 let image = imageName session.Kind
                 // Excel 在「客户端还活着」时经常不肯退：等一小会儿，还不走就结束进程
-                let stubborn = Proc.waitGone image session.Pids 5000
-                Proc.kill stubborn
+                let stubborn = Process.waitGone image session.Pids 5000
+                Process.kill stubborn
                 // 结束进程也是异步的：等它真的消失，别让人刚 close 完又看见它
-                Proc.waitGone image session.Pids 3000 |> ignore)
+                Process.waitGone image session.Pids 3000 |> ignore)
 
     /// 凭地址收尾（跨进程也行）：先按严格指纹解析，再按原状态关。
     /// 收尾只关心「是不是同一只进程」，所以保存时间漂移了也照关（丢弃改动 + 退出），
@@ -629,7 +605,6 @@ module Host =
                 match session.App with
                 | WordApp app -> app.Documents.Count
                 | ExcelApp app -> app.Workbooks.Count
-                | AcadApp app -> app.Documents.Count
             with _ ->
                 -1
 
@@ -656,11 +631,9 @@ module Host =
         match kind with
         | Kind.Word -> WordHost.Host.exec (fun app -> action (WordApp app))
         | Kind.Excel -> ExcelHost.Host.exec (fun app -> action (ExcelApp app))
-        | Kind.AutoCAD -> AutoCADHost.Host.exec (fun app -> action (AcadApp app))
 
     /// 一条命令 + 取回一个值。
     let execOnceQuery (kind: Kind) (query: App -> 'T) : Result<'T, string> =
         match kind with
         | Kind.Word -> WordHost.Host.execQuery (fun app -> query (WordApp app))
         | Kind.Excel -> ExcelHost.Host.execQuery (fun app -> query (ExcelApp app))
-        | Kind.AutoCAD -> AutoCADHost.Host.execQuery (fun app -> query (AcadApp app))
